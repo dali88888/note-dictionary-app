@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑",
+    Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: #fafaf7;
+  color: #1f2937;
+}
+
+/* Ruby-style stacked annotation: pinyin above hanzi.
+   Every cluster reserves space for the pinyin row even when blank,
+   so the hanzi line stays vertically aligned regardless of toggle. */
+.hanzi-cluster {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.375rem;
+  line-height: 1;
+}
+
+.hanzi-cluster .pinyin {
+  font-size: 0.75rem;
+  line-height: 1;
+  color: #6d4c1f;
+  font-style: italic;
+  margin-bottom: 0.25rem;
+  min-height: 0.75rem;
+  white-space: nowrap;
+}
+
+.hanzi-cluster .hanzi {
+  line-height: 1.1;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.hanzi-cluster.size-sm .hanzi { font-size: 1rem; }
+.hanzi-cluster.size-sm .pinyin { font-size: 0.625rem; }
+
+.hanzi-cluster.size-md .hanzi { font-size: 1.375rem; }
+.hanzi-cluster.size-md .pinyin { font-size: 0.75rem; }
+
+.hanzi-cluster.size-lg .hanzi { font-size: 2rem; }
+.hanzi-cluster.size-lg .pinyin { font-size: 0.95rem; }
+
+.hanzi-cluster.size-xl .hanzi { font-size: 3.25rem; }
+.hanzi-cluster.size-xl .pinyin { font-size: 1.15rem; margin-bottom: 0.4rem; }
+
+.fade-in {
+  animation: fadeIn 220ms ease both;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s infinite;
+  border-radius: 0.5rem;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
