@@ -32,6 +32,7 @@ import type {
 import { translateWord } from '../api/translateClient';
 import type { UILang } from '../i18n';
 import { supabase } from '../auth/supabaseClient';
+import type { ManagedStudent } from '../auth/types';
 
 const DEFAULT_LANGUAGE = 'English';
 const DEFAULT_UI_LANG: UILang = 'zh';
@@ -69,6 +70,13 @@ interface SessionRow {
 interface SessionEntryRow {
   session_id: string;
   entry_id: string;
+}
+
+interface ManagedStudentRow {
+  id: string;
+  teacher_id: string;
+  name: string;
+  created_at: string;
 }
 
 /* ───────────────────────── row → app-shape mappers ───────────────────────── */
@@ -127,6 +135,12 @@ interface DictState {
    */
   currentManagedStudentId: string | null;
 
+  /**
+   * Teacher's roster of managed-student folders (loaded on hydrate).
+   * Empty for students because RLS gates managed_students by teacher_id.
+   */
+  managedStudents: ManagedStudent[];
+
   /** True once hydrate() has finished (UI shows skeleton while false). */
   hydrated: boolean;
 
@@ -144,6 +158,11 @@ interface DictState {
    * so entries/sessions reflect the new scope.
    */
   setCurrentManagedStudent: (id: string | null) => Promise<void>;
+
+  /** Teacher CRUD on the managed-student folder list. */
+  addManagedStudent: (name: string) => Promise<ManagedStudent | null>;
+  renameManagedStudent: (id: string, name: string) => Promise<void>;
+  deleteManagedStudent: (id: string) => Promise<void>;
 
   query: (word: string, direction?: TranslationDirection) => Promise<void>;
   clearLatest: () => void;
@@ -175,6 +194,7 @@ export const useDictStore = create<DictState>()(
         showPinyin: true,
       },
       currentManagedStudentId: null,
+      managedStudents: [],
       hydrated: false,
       latestEntryId: null,
       loading: false,
@@ -185,7 +205,13 @@ export const useDictStore = create<DictState>()(
       hydrate: async () => {
         const userId = await getCurrentUserId();
         if (!userId) {
-          set({ hydrated: true, entries: {}, sessions: [], activeManualSessionId: null });
+          set({
+            hydrated: true,
+            entries: {},
+            sessions: [],
+            activeManualSessionId: null,
+            managedStudents: [],
+          });
           return;
         }
 
@@ -213,9 +239,23 @@ export const useDictStore = create<DictState>()(
               ? sessQ.is('managed_student_id', null)
               : sessQ.eq('managed_student_id', ctx);
 
-          const [entriesRes, sessRes] = await Promise.all([entriesQ, sessQ]);
+          // Always fetch the managed-student roster too — RLS gates this
+          // by teacher_id, so it returns [] for student accounts.
+          const studentsQ = supabase
+            .from('managed_students')
+            .select('*')
+            .eq('teacher_id', userId)
+            .order('created_at', { ascending: true });
+
+          const [entriesRes, sessRes, studentsRes] = await Promise.all([
+            entriesQ,
+            sessQ,
+            studentsQ,
+          ]);
           if (entriesRes.error) throw entriesRes.error;
           if (sessRes.error) throw sessRes.error;
+          if (studentsRes.error) throw studentsRes.error;
+          const studentRows = (studentsRes.data ?? []) as ManagedStudentRow[];
 
           const entryRows = (entriesRes.data ?? []) as EntryRow[];
           const sessRows = (sessRes.data ?? []) as SessionRow[];
@@ -259,10 +299,24 @@ export const useDictStore = create<DictState>()(
           // At most one manual session is "active" (ended_at IS NULL) per ctx.
           const active = sessions.find((s) => s.kind === 'manual' && !s.endedAt);
 
+          // If the persisted ctx points to a student that's been deleted,
+          // silently fall back to the teacher's own context.
+          const ctxStillValid =
+            ctx === null || studentRows.some((r) => r.id === ctx);
+
           set({
             entries: entriesIdx,
             sessions,
             activeManualSessionId: active?.id ?? null,
+            managedStudents: studentRows.map(
+              (r): ManagedStudent => ({
+                id: r.id,
+                teacher_id: r.teacher_id,
+                name: r.name,
+                created_at: r.created_at,
+              }),
+            ),
+            currentManagedStudentId: ctxStillValid ? ctx : null,
             hydrated: true,
             error: null,
           });
@@ -279,6 +333,7 @@ export const useDictStore = create<DictState>()(
           entries: {},
           sessions: [],
           activeManualSessionId: null,
+          managedStudents: [],
           latestEntryId: null,
           loading: false,
           error: null,
@@ -297,6 +352,81 @@ export const useDictStore = create<DictState>()(
           hydrated: false,
         });
         await get().hydrate();
+      },
+
+      /* ─────────── managed-students CRUD ─────────── */
+
+      addManagedStudent: async (rawName) => {
+        const name = rawName.trim();
+        if (!name) return null;
+        const userId = await getCurrentUserId();
+        if (!userId) return null;
+        const { data, error } = await supabase
+          .from('managed_students')
+          .insert({ teacher_id: userId, name })
+          .select()
+          .single();
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error('[dictStore] addManagedStudent failed', error);
+          set({ error: error.message });
+          return null;
+        }
+        const row = data as ManagedStudentRow;
+        const ms: ManagedStudent = {
+          id: row.id,
+          teacher_id: row.teacher_id,
+          name: row.name,
+          created_at: row.created_at,
+        };
+        set((s) => ({ managedStudents: [...s.managedStudents, ms] }));
+        return ms;
+      },
+
+      renameManagedStudent: async (id, rawName) => {
+        const name = rawName.trim();
+        if (!name) return;
+        const { error } = await supabase
+          .from('managed_students')
+          .update({ name })
+          .eq('id', id);
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error('[dictStore] renameManagedStudent failed', error);
+          set({ error: error.message });
+          return;
+        }
+        set((s) => ({
+          managedStudents: s.managedStudents.map((m) =>
+            m.id === id ? { ...m, name } : m,
+          ),
+        }));
+      },
+
+      deleteManagedStudent: async (id) => {
+        // Postgres ON DELETE CASCADE wipes that student's entries +
+        // class_sessions automatically, which is the desired behavior:
+        // when a teacher removes a student folder, all their data goes too.
+        const { error } = await supabase
+          .from('managed_students')
+          .delete()
+          .eq('id', id);
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error('[dictStore] deleteManagedStudent failed', error);
+          set({ error: error.message });
+          return;
+        }
+        const wasCurrent = get().currentManagedStudentId === id;
+        set((s) => ({
+          managedStudents: s.managedStudents.filter((m) => m.id !== id),
+          // If we deleted the active context, fall back to "self".
+          currentManagedStudentId: wasCurrent ? null : s.currentManagedStudentId,
+        }));
+        if (wasCurrent) {
+          // Reload entries+sessions for the new (self) context.
+          await get().hydrate();
+        }
       },
 
       /* ─────────── query / mutate ─────────── */

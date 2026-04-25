@@ -152,6 +152,26 @@ const DICT = {
     roleBadgeStudent: '学生',
     roleBadgeTeacher: '教师',
     helloUser: (v: Vars) => `你好，${v.name}`,
+
+    /* Managed-student switcher (teacher only) */
+    contextLabel: '当前',
+    contextSelf: '我自己',
+    contextStudent: (v: Vars) => `学生：${v.name}`,
+    manageStudentsBtn: '管理学生子文件夹',
+    studentManagerTitle: '学生子文件夹',
+    studentManagerHint:
+      '为每个学生建立独立的查询空间。在某学生上下文中查询的所有词条只会归属于该学生，便于课后单独导出与复习。',
+    studentEmpty: '还没有学生子文件夹。',
+    addStudentLabel: '新增学生',
+    addStudentPlaceholder: '学生姓名',
+    addStudentBtn: '添加',
+    studentRowEdit: '重命名',
+    studentRowDelete: '删除',
+    studentRowSave: '保存',
+    studentRowCancel: '取消',
+    studentDeleteConfirm: (v: Vars) =>
+      `删除学生"${v.name}"？该学生名下的所有词条与课程都会一并删除。`,
+    closeBtn: '关闭',
   },
   en: {
     appTitle: 'Classroom Chinese Lookup',
@@ -301,6 +321,26 @@ const DICT = {
     roleBadgeStudent: 'Student',
     roleBadgeTeacher: 'Teacher',
     helloUser: (v: Vars) => `Hi, ${v.name}`,
+
+    /* Managed-student switcher (teacher only) */
+    contextLabel: 'Context',
+    contextSelf: 'Myself',
+    contextStudent: (v: Vars) => `Student: ${v.name}`,
+    manageStudentsBtn: 'Manage student folders',
+    studentManagerTitle: 'Student folders',
+    studentManagerHint:
+      'Each student gets a private lookup folder. Queries you make while a student is selected belong to that student only — handy for per-student exports and review.',
+    studentEmpty: 'No student folders yet.',
+    addStudentLabel: 'Add student',
+    addStudentPlaceholder: 'Student name',
+    addStudentBtn: 'Add',
+    studentRowEdit: 'Rename',
+    studentRowDelete: 'Delete',
+    studentRowSave: 'Save',
+    studentRowCancel: 'Cancel',
+    studentDeleteConfirm: (v: Vars) =>
+      `Delete student "${v.name}"? All entries and class sessions belonging to this student will also be deleted.`,
+    closeBtn: 'Close',
   },
 } as const satisfies Record<UILang, Record<string, string | ((v: Vars) => string)>>;
 
