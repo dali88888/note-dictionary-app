@@ -37,6 +37,14 @@ import type { ManagedStudent } from '../auth/types';
 const DEFAULT_LANGUAGE = 'English';
 const DEFAULT_UI_LANG: UILang = 'zh';
 
+/**
+ * localStorage key used by the pre-cloud version of this app.  Step 4's
+ * importLegacy() reads from it; once the import succeeds the key is
+ * renamed to `${LEGACY_KEY}-imported` so we never re-prompt.
+ */
+export const LEGACY_KEY = 'note-dict-v1';
+export const LEGACY_SKIP_KEY = 'note-dict-import-skipped';
+
 interface Prefs {
   language: string;
   uiLanguage: UILang;
@@ -117,6 +125,37 @@ async function getCurrentUserId(): Promise<string | null> {
   return data.user?.id ?? null;
 }
 
+/**
+ * Inspect localStorage for legacy pre-cloud data.  Returns null when the
+ * blob is missing or unparseable (i.e. nothing to import); returns
+ * counts when a plausible legacy blob is found.  Used by the UI to
+ * decide whether to show the import-prompt dialog.
+ */
+export function readLegacyStats(): { entries: number; sessions: number } | null {
+  const raw = localStorage.getItem(LEGACY_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { state?: Record<string, unknown> };
+    const legacy = parsed?.state ?? (parsed as Record<string, unknown>);
+    const entries = (legacy?.entries ?? {}) as Record<string, unknown>;
+    const sessions = (legacy?.sessions ?? []) as unknown[];
+    const eN = Object.keys(entries).length;
+    const sN = Array.isArray(sessions) ? sessions.length : 0;
+    if (eN === 0 && sN === 0) return null;
+    return { entries: eN, sessions: sN };
+  } catch {
+    return null;
+  }
+}
+
+export function legacyImportSkipped(): boolean {
+  return localStorage.getItem(LEGACY_SKIP_KEY) === '1';
+}
+
+export function markLegacyImportSkipped(): void {
+  localStorage.setItem(LEGACY_SKIP_KEY, '1');
+}
+
 /* ───────────────────────── store shape ───────────────────────── */
 
 interface DictState {
@@ -163,6 +202,14 @@ interface DictState {
   addManagedStudent: (name: string) => Promise<ManagedStudent | null>;
   renameManagedStudent: (id: string, name: string) => Promise<void>;
   deleteManagedStudent: (id: string) => Promise<void>;
+
+  /**
+   * One-shot import of pre-cloud data from the legacy
+   * `note-dict-v1` localStorage blob.  Resolves with how many rows
+   * landed in the cloud (or an error message).  Renames the legacy
+   * key to `…-imported` afterward so we never re-prompt.
+   */
+  importLegacy: () => Promise<{ entries: number; sessions: number; error?: string }>;
 
   query: (word: string, direction?: TranslationDirection) => Promise<void>;
   clearLatest: () => void;
@@ -426,6 +473,125 @@ export const useDictStore = create<DictState>()(
         if (wasCurrent) {
           // Reload entries+sessions for the new (self) context.
           await get().hydrate();
+        }
+      },
+
+      /* ─────────── legacy localStorage import ─────────── */
+
+      importLegacy: async () => {
+        const userId = await getCurrentUserId();
+        if (!userId) return { entries: 0, sessions: 0, error: 'Not signed in' };
+
+        const raw = localStorage.getItem(LEGACY_KEY);
+        if (!raw) return { entries: 0, sessions: 0 };
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          return { entries: 0, sessions: 0, error: 'Could not parse legacy data' };
+        }
+
+        const legacy =
+          (parsed as { state?: unknown })?.state ?? (parsed as Record<string, unknown>);
+        const entriesObj =
+          ((legacy as { entries?: Record<string, DictionaryEntry> })?.entries ??
+            {}) as Record<string, DictionaryEntry>;
+        const sessionsArr =
+          ((legacy as { sessions?: ClassSession[] })?.sessions ??
+            []) as ClassSession[];
+
+        const entriesArr = Object.values(entriesObj);
+        if (entriesArr.length === 0 && sessionsArr.length === 0) {
+          // Nothing to do — quietly tidy up so we never re-prompt.
+          localStorage.setItem(`${LEGACY_KEY}-imported`, raw);
+          localStorage.removeItem(LEGACY_KEY);
+          return { entries: 0, sessions: 0 };
+        }
+
+        try {
+          // 1. Bulk-insert entries.  PostgREST returns rows in the same
+          // order as the request, which gives us a reliable old→new id
+          // mapping without per-row queries.
+          const idMap = new Map<string, string>();
+          if (entriesArr.length > 0) {
+            const rows = entriesArr.map((e) => ({
+              owner_user_id: userId,
+              managed_student_id: null,
+              word: e.word,
+              direction: e.direction ?? 'zh-to-other',
+              language: e.language || 'auto',
+              word_syllables: e.wordSyllables ?? [],
+              meanings: e.meanings ?? [],
+              queried_at: new Date(e.queriedAt).toISOString(),
+            }));
+            const { data, error } = await supabase
+              .from('entries')
+              .insert(rows)
+              .select('id');
+            if (error) throw error;
+            const inserted = (data ?? []) as { id: string }[];
+            entriesArr.forEach((old, i) => {
+              const id = inserted[i]?.id;
+              if (id) idMap.set(old.id, id);
+            });
+          }
+
+          // 2. Bulk-insert sessions, same id-mapping trick.
+          const sessIdMap = new Map<string, string>();
+          if (sessionsArr.length > 0) {
+            const rows = sessionsArr.map((s) => ({
+              owner_user_id: userId,
+              managed_student_id: null,
+              name: s.name,
+              kind: s.kind,
+              created_at: new Date(s.createdAt).toISOString(),
+              ended_at: s.endedAt ? new Date(s.endedAt).toISOString() : null,
+            }));
+            const { data, error } = await supabase
+              .from('class_sessions')
+              .insert(rows)
+              .select('id');
+            if (error) throw error;
+            const inserted = (data ?? []) as { id: string }[];
+            sessionsArr.forEach((old, i) => {
+              const id = inserted[i]?.id;
+              if (id) sessIdMap.set(old.id, id);
+            });
+          }
+
+          // 3. Re-link via session_entries with the mapped ids.
+          const links: SessionEntryRow[] = [];
+          for (const s of sessionsArr) {
+            const newSessId = sessIdMap.get(s.id);
+            if (!newSessId) continue;
+            for (const oldEntryId of s.entryIds ?? []) {
+              const newEntryId = idMap.get(oldEntryId);
+              if (newEntryId) {
+                links.push({ session_id: newSessId, entry_id: newEntryId });
+              }
+            }
+          }
+          if (links.length > 0) {
+            const { error } = await supabase.from('session_entries').insert(links);
+            if (error) throw error;
+          }
+
+          // 4. Stash the legacy blob under a different key (in case the
+          // user wants to inspect it later) and remove the live key so
+          // we never re-prompt on this device.
+          localStorage.setItem(`${LEGACY_KEY}-imported`, raw);
+          localStorage.removeItem(LEGACY_KEY);
+
+          // 5. Refresh the cache so the imported rows show up in the UI.
+          await get().hydrate();
+
+          return { entries: entriesArr.length, sessions: sessionsArr.length };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.error('[dictStore] importLegacy failed', err);
+          return { entries: 0, sessions: 0, error: msg };
         }
       },
 

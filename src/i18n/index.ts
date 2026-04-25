@@ -172,6 +172,17 @@ const DICT = {
     studentDeleteConfirm: (v: Vars) =>
       `删除学生"${v.name}"？该学生名下的所有词条与课程都会一并删除。`,
     closeBtn: '关闭',
+
+    /* Legacy localStorage import dialog */
+    importLegacyTitle: '导入本设备上的旧数据？',
+    importLegacyBody: (v: Vars) =>
+      `检测到此设备本地保存了 ${v.entries} 条词条与 ${v.sessions} 组课程（来自您注册账号之前的查询）。是否一次性导入到您的云端账户，便于在其他设备上访问？`,
+    importLegacyConfirm: '导入到云端',
+    importLegacySkip: '暂不导入',
+    importLegacyImporting: '导入中…',
+    importLegacyDone: (v: Vars) =>
+      `已导入 ${v.entries} 条词条 / ${v.sessions} 组课程。`,
+    importLegacyFailed: (v: Vars) => `导入失败：${v.msg}`,
   },
   en: {
     appTitle: 'Classroom Chinese Lookup',
@@ -341,6 +352,17 @@ const DICT = {
     studentDeleteConfirm: (v: Vars) =>
       `Delete student "${v.name}"? All entries and class sessions belonging to this student will also be deleted.`,
     closeBtn: 'Close',
+
+    /* Legacy localStorage import dialog */
+    importLegacyTitle: 'Import data from this device?',
+    importLegacyBody: (v: Vars) =>
+      `We found ${v.entries} entries and ${v.sessions} class sessions saved locally on this device (from before you signed up). Import them into your cloud account so they're available on other devices?`,
+    importLegacyConfirm: 'Import to cloud',
+    importLegacySkip: 'Skip',
+    importLegacyImporting: 'Importing…',
+    importLegacyDone: (v: Vars) =>
+      `Imported ${v.entries} ${Number(v.entries) === 1 ? 'entry' : 'entries'} / ${v.sessions} session${Number(v.sessions) === 1 ? '' : 's'}.`,
+    importLegacyFailed: (v: Vars) => `Import failed: ${v.msg}`,
   },
 } as const satisfies Record<UILang, Record<string, string | ((v: Vars) => string)>>;
 
