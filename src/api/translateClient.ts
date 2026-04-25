@@ -1,4 +1,5 @@
 import type { TranslateResponse, TranslationDirection } from '../types/dictionary';
+import { supabase } from '../auth/supabaseClient';
 
 export class TranslateError extends Error {
   constructor(message: string, public status?: number) {
@@ -7,14 +8,35 @@ export class TranslateError extends Error {
   }
 }
 
+/**
+ * Hit /api/translate with the caller's Supabase JWT in the Authorization
+ * header.  The serverless function rejects unauthenticated traffic so we
+ * don't leak Gemini/Claude quota to anonymous abusers.
+ */
 export async function translateWord(
   word: string,
   language: string,
   direction: TranslationDirection = 'zh-to-other',
 ): Promise<TranslateResponse> {
+  // getSession() returns whatever the client has cached locally.  With
+  // autoRefreshToken: true (set in supabaseClient), the access_token is
+  // kept fresh on a timer — we don't need to manually call refreshSession
+  // before each request.  If the token is still expired (e.g. tab was
+  // sleeping), the server returns 401 and the user gets the "please sign
+  // in again" message naturally.
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new TranslateError('Not signed in', 401);
+  }
+
   const res = await fetch('/api/translate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
     body: JSON.stringify({ word, language, direction }),
   });
 

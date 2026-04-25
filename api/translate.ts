@@ -251,12 +251,100 @@ async function callClaude(
 }
 
 /* ────────────────────────────────────────────────────────────────
+ * Auth — verify the caller's Supabase access token.  Without this gate,
+ * anyone could hit /api/translate with curl and burn through the Gemini
+ * (or Claude) quota for free.
+ *
+ * We delegate signature verification to Supabase's own /auth/v1/user
+ * endpoint instead of reimplementing JWT-HS256 with Web Crypto: it costs
+ * one extra ~80ms request, which is negligible next to the AI call (2–5s),
+ * and keeps the function free of crypto deps that would balloon the
+ * Edge-runtime bundle.
+ *
+ * Env vars (we tolerate either the VITE_-prefixed or non-prefixed forms
+ * so the user doesn't need to duplicate Supabase secrets in Vercel):
+ *   SUPABASE_URL            (or VITE_SUPABASE_URL)
+ *   SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_PUBLISHABLE_KEY)
+ * ─────────────────────────────────────────────────────────────── */
+
+function envSupabaseUrl(): string | undefined {
+  return process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
+}
+function envSupabaseKey(): string | undefined {
+  return (
+    process.env.SUPABASE_PUBLISHABLE_KEY ??
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+  );
+}
+
+type AuthOk = { ok: true; userId: string };
+type AuthFail = { ok: false; error: string; status: number };
+
+async function verifyAuth(req: Request): Promise<AuthOk | AuthFail> {
+  const supaUrl = envSupabaseUrl();
+  const supaKey = envSupabaseKey();
+  if (!supaUrl || !supaKey) {
+    // We don't want to crash users with a 500 at /api/translate when the
+    // app itself is otherwise running, but we DO want to fail closed —
+    // an unconfigured server can't safely accept requests.
+    return {
+      ok: false,
+      error: '服务端未配置 SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY',
+      status: 500,
+    };
+  }
+
+  const auth = req.headers.get('authorization') ?? '';
+  const m = /^Bearer\s+(.+)$/i.exec(auth);
+  if (!m) {
+    return { ok: false, error: '需要登录后再调用查询接口', status: 401 };
+  }
+  const token = m[1].trim();
+
+  let res: Response;
+  try {
+    res = await fetch(`${supaUrl.replace(/\/+$/, '')}/auth/v1/user`, {
+      headers: {
+        apikey: supaKey,
+        authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `认证服务不可达：${msg}`, status: 502 };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, error: '登录状态已过期，请重新登录', status: 401 };
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: `认证服务返回错误（${res.status}）`,
+      status: 502,
+    };
+  }
+
+  const user = (await res.json()) as { id?: string };
+  if (!user?.id) {
+    return { ok: false, error: '认证服务未返回用户 id', status: 401 };
+  }
+  return { ok: true, userId: user.id };
+}
+
+/* ────────────────────────────────────────────────────────────────
  * Handler
  * ─────────────────────────────────────────────────────────────── */
 
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405);
+  }
+
+  // Auth gate — runs before any AI call so unauthorized traffic is cheap.
+  const auth = await verifyAuth(req);
+  if (!auth.ok) {
+    return json({ error: auth.error }, auth.status);
   }
 
   let payload: TranslateRequest;
