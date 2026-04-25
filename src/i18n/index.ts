@@ -112,6 +112,40 @@ const DICT = {
     pptFooterBrand: 'note.neooccidental.com · 课堂中文速查',
     pptEntriesCount: (v: Vars) => `共 ${v.n} 个词条`,
     pptGroupCount: (v: Vars) => `${v.n} 组课程 / 日期`,
+
+    /* Auth — login/signup screen */
+    loginTab: '登录',
+    signupTab: '注册',
+    emailLabel: '邮箱',
+    passwordLabel: '密码',
+    displayNameLabel: '昵称',
+    roleLabel: '我是',
+    roleStudent: '学生',
+    roleStudentHint: '记录自己的查询历史',
+    roleTeacher: '教师',
+    roleTeacherHint: '可为多名学生分别建档',
+    signInBtn: '登录',
+    signingIn: '登录中…',
+    signUpBtn: '注册',
+    signingUp: '注册中…',
+    orDivider: '或',
+    signInWithGoogle: '用 Google 登录',
+    signInWithGitHub: '用 GitHub 登录',
+    confirmEmailHeading: '请查收邮箱',
+    confirmEmailBody: (v: Vars) =>
+      `我们向 ${v.email} 发送了确认链接，点击后即可登录。`,
+
+    /* Password strength rules */
+    pwRuleLen: '至少 8 位',
+    pwRuleLower: '包含小写字母',
+    pwRuleUpper: '包含大写字母',
+    pwRuleDigit: '包含数字',
+    pwRuleSpecial: '包含特殊字符',
+
+    /* Config-error fallback */
+    authConfigMissingTitle: '认证服务未配置',
+    authConfigMissingBody:
+      '请在 .env.local 中填入 Supabase 凭据（URL + publishable key）后重新加载。',
   },
   en: {
     appTitle: 'Classroom Chinese Lookup',
@@ -221,6 +255,40 @@ const DICT = {
       `${v.n} ${Number(v.n) === 1 ? 'entry' : 'entries'}`,
     pptGroupCount: (v: Vars) =>
       `${v.n} class${Number(v.n) === 1 ? '' : 'es'} / date${Number(v.n) === 1 ? '' : 's'}`,
+
+    /* Auth — login/signup screen */
+    loginTab: 'Sign in',
+    signupTab: 'Sign up',
+    emailLabel: 'Email',
+    passwordLabel: 'Password',
+    displayNameLabel: 'Display name',
+    roleLabel: 'I am a',
+    roleStudent: 'Student',
+    roleStudentHint: 'Track my own lookups',
+    roleTeacher: 'Teacher',
+    roleTeacherHint: 'Manage folders for my students',
+    signInBtn: 'Sign in',
+    signingIn: 'Signing in…',
+    signUpBtn: 'Create account',
+    signingUp: 'Creating account…',
+    orDivider: 'or',
+    signInWithGoogle: 'Sign in with Google',
+    signInWithGitHub: 'Sign in with GitHub',
+    confirmEmailHeading: 'Check your inbox',
+    confirmEmailBody: (v: Vars) =>
+      `We sent a confirmation link to ${v.email}. Click it to finish signing up.`,
+
+    /* Password strength rules */
+    pwRuleLen: 'At least 8 characters',
+    pwRuleLower: 'A lowercase letter',
+    pwRuleUpper: 'An uppercase letter',
+    pwRuleDigit: 'A digit',
+    pwRuleSpecial: 'A special character',
+
+    /* Config-error fallback */
+    authConfigMissingTitle: 'Auth not configured',
+    authConfigMissingBody:
+      'Set the Supabase URL + publishable key in .env.local and reload.',
   },
 } as const satisfies Record<UILang, Record<string, string | ((v: Vars) => string)>>;
 
