@@ -3,6 +3,7 @@ import { TopBar } from './components/Header/TopBar';
 import { SearchView } from './components/Search/SearchView';
 import { HistoryView } from './components/History/HistoryView';
 import { AuthGate } from './components/Auth/AuthGate';
+import { AuthModal } from './components/Auth/AuthModal';
 import { LegacyImportDialog } from './components/Auth/LegacyImportDialog';
 import { useAuth } from './auth/AuthContext';
 import {
@@ -68,6 +69,10 @@ export default function App() {
           {view === 'search' ? <SearchView /> : <HistoryView />}
         </main>
       </div>
+
+      {/* Login/signup overlay — opened from TopBar buttons or any
+          sign-in CTA elsewhere via useAuth().openAuthModal(). */}
+      <AuthModal />
 
       {importOpen && legacyStats && (
         <LegacyImportDialog

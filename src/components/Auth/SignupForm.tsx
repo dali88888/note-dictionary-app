@@ -44,8 +44,9 @@ export function SignupForm() {
       // Show "check your inbox" state instead of redirecting.
       setConfirmRequired(true);
     }
-    // If needsEmailConfirm is false (e.g. confirmation disabled in Supabase),
-    // a session is created and AuthGate rerenders into the authed view.
+    // If needsEmailConfirm is false (e.g. confirmation disabled in
+    // Supabase), a session is created immediately — AuthContext flips
+    // status to 'authed' which auto-closes the AuthModal.
   };
 
   if (confirmRequired) {

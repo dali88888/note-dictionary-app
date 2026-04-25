@@ -251,18 +251,31 @@ async function callClaude(
 }
 
 /* ────────────────────────────────────────────────────────────────
- * Auth — verify the caller's Supabase access token.  Without this gate,
- * anyone could hit /api/translate with curl and burn through the Gemini
- * (or Claude) quota for free.
+ * Auth — best-effort verification of the caller's Supabase access token.
+ *
+ * Anonymous traffic is now ALLOWED so visitors can try the dictionary
+ * without registering — registration is positioned as an optional
+ * upgrade for users who want a persistent knowledge base.  When a token
+ * IS provided (signed-in users), we still verify it so an expired or
+ * tampered token is rejected outright instead of silently treated as
+ * anonymous.  This keeps the contract clean: if the caller claims to
+ * be a particular user, that claim is checked; if they make no claim,
+ * they're served as guest.
  *
  * We delegate signature verification to Supabase's own /auth/v1/user
- * endpoint instead of reimplementing JWT-HS256 with Web Crypto: it costs
- * one extra ~80ms request, which is negligible next to the AI call (2–5s),
- * and keeps the function free of crypto deps that would balloon the
- * Edge-runtime bundle.
+ * endpoint instead of reimplementing JWT-HS256 with Web Crypto: it
+ * costs one extra ~80ms request, which is negligible next to the AI
+ * call (2–5s), and keeps the function free of crypto deps that would
+ * balloon the Edge-runtime bundle.
  *
- * Env vars (we tolerate either the VITE_-prefixed or non-prefixed forms
- * so the user doesn't need to duplicate Supabase secrets in Vercel):
+ * Cost protection: now that anon traffic is allowed, abuse is gated
+ * only by the AI provider's per-key quota.  TODO when this becomes a
+ * real problem: add IP rate-limiting at the edge (Vercel KV, Upstash,
+ * or Cloudflare Turnstile).
+ *
+ * Env vars (we tolerate either the VITE_-prefixed or non-prefixed
+ * forms so the user doesn't need to duplicate Supabase secrets in
+ * Vercel):
  *   SUPABASE_URL            (or VITE_SUPABASE_URL)
  *   SUPABASE_PUBLISHABLE_KEY (or VITE_SUPABASE_PUBLISHABLE_KEY)
  * ─────────────────────────────────────────────────────────────── */
@@ -277,29 +290,41 @@ function envSupabaseKey(): string | undefined {
   );
 }
 
-type AuthOk = { ok: true; userId: string };
+/**
+ * Auth result:
+ *   • { ok: true, userId: string | null } — request can proceed.
+ *     userId === null means the caller is anonymous (no Authorization
+ *     header).  userId is set when the caller passed a valid bearer
+ *     token.
+ *   • { ok: false, … } — caller passed a token that turned out to be
+ *     invalid/expired/etc.  We reject so the client can prompt the
+ *     user to sign in again instead of silently downgrading them to
+ *     anonymous (which would mask "I'm logged in but actually not").
+ */
+type AuthOk = { ok: true; userId: string | null };
 type AuthFail = { ok: false; error: string; status: number };
 
 async function verifyAuth(req: Request): Promise<AuthOk | AuthFail> {
+  const auth = req.headers.get('authorization') ?? '';
+  const m = /^Bearer\s+(.+)$/i.exec(auth);
+  if (!m) {
+    // Anonymous request — allowed.
+    return { ok: true, userId: null };
+  }
+  const token = m[1].trim();
+
+  // Token claimed; we have to verify it.  If the server isn't configured
+  // for Supabase we can't honor the claim, so fail closed (better than
+  // silently letting through what might be a stolen/expired token).
   const supaUrl = envSupabaseUrl();
   const supaKey = envSupabaseKey();
   if (!supaUrl || !supaKey) {
-    // We don't want to crash users with a 500 at /api/translate when the
-    // app itself is otherwise running, but we DO want to fail closed —
-    // an unconfigured server can't safely accept requests.
     return {
       ok: false,
       error: '服务端未配置 SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY',
       status: 500,
     };
   }
-
-  const auth = req.headers.get('authorization') ?? '';
-  const m = /^Bearer\s+(.+)$/i.exec(auth);
-  if (!m) {
-    return { ok: false, error: '需要登录后再调用查询接口', status: 401 };
-  }
-  const token = m[1].trim();
 
   let res: Response;
   try {

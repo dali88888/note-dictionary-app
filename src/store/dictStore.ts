@@ -364,6 +364,10 @@ export const useDictStore = create<DictState>()(
               }),
             ),
             currentManagedStudentId: ctxStillValid ? ctx : null,
+            // Drop any anon-mode latestEntryId — it pointed to an
+            // in-memory entry that's no longer in `entries`, so leaving
+            // it would render an empty card after sign-in.
+            latestEntryId: null,
             hydrated: true,
             error: null,
           });
@@ -601,10 +605,6 @@ export const useDictStore = create<DictState>()(
         const word = rawWord.trim();
         if (!word) return;
         const userId = await getCurrentUserId();
-        if (!userId) {
-          set({ error: 'Not signed in' });
-          return;
-        }
         set({ loading: true, error: null });
         try {
           const { prefs, currentManagedStudentId, sessions, entries, activeManualSessionId } =
@@ -616,6 +616,38 @@ export const useDictStore = create<DictState>()(
               ? prefs.language
               : data.language?.trim() || 'auto';
 
+          // ── Anonymous path ─────────────────────────────────────────
+          // No signed-in user → skip Supabase entirely.  Hold the
+          // result in memory so SearchView can render it via
+          // latestEntryId, and let it be replaced on the next query.
+          // We don't accumulate history because anon users have no
+          // place to view it (HistoryView shows a sign-in CTA), and
+          // pretending to keep history would be misleading — refresh
+          // wipes everything.
+          if (!userId) {
+            const id =
+              (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+                ? crypto.randomUUID()
+                : `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+            const anonEntry: DictionaryEntry = {
+              id,
+              direction,
+              word: data.word,
+              wordSyllables: data.wordSyllables,
+              language,
+              meanings: data.meanings,
+              queriedAt: Date.now(),
+            };
+            set({
+              entries: { [id]: anonEntry },
+              latestEntryId: id,
+              loading: false,
+              error: null,
+            });
+            return;
+          }
+
+          // ── Signed-in path: persist to Supabase ────────────────────
           // 1. Insert the entry.  DB fills id + queried_at.
           const { data: entryRow, error: entryErr } = await supabase
             .from('entries')

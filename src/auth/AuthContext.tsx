@@ -23,6 +23,7 @@ import { supabase, supabaseConfigured } from './supabaseClient';
 import type { Profile, UserRole } from './types';
 
 type Status = 'loading' | 'authed' | 'anon';
+export type AuthModalMode = 'login' | 'signup';
 
 interface SignupArgs {
   email: string;
@@ -44,6 +45,18 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   /** Refetch the profile row (call after editing display_name or role). */
   refreshProfile: () => Promise<void>;
+
+  /**
+   * Login/signup is now optional.  Any component (TopBar buttons,
+   * SignupPromptBanner, sign-in CTAs in empty states) can pop the
+   * modal by calling openAuthModal('login' | 'signup').  The modal
+   * itself is rendered by AuthProvider so consumers don't have to
+   * wire it up everywhere.
+   */
+  authModalOpen: boolean;
+  authModalMode: AuthModalMode;
+  openAuthModal: (mode?: AuthModalMode) => void;
+  closeAuthModal: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -66,6 +79,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>('loading');
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
 
   // Mount: hydrate session, then subscribe to changes.
   useEffect(() => {
@@ -153,6 +168,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
   }, []);
 
+  const openAuthModal = useCallback((mode: AuthModalMode = 'login') => {
+    setAuthModalMode(mode);
+    setAuthModalOpen(true);
+  }, []);
+
+  const closeAuthModal = useCallback(() => {
+    setAuthModalOpen(false);
+  }, []);
+
+  // Auto-close the modal when auth flips to authed (i.e. login succeeded).
+  // This handles both email/password (synchronous flip) and OAuth
+  // (post-redirect onAuthStateChange).
+  useEffect(() => {
+    if (status === 'authed' && authModalOpen) {
+      setAuthModalOpen(false);
+    }
+  }, [status, authModalOpen]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
@@ -164,8 +197,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInOAuth,
       signOut,
       refreshProfile,
+      authModalOpen,
+      authModalMode,
+      openAuthModal,
+      closeAuthModal,
     }),
-    [status, session, profile, signUpEmail, signInEmail, signInOAuth, signOut, refreshProfile],
+    [
+      status,
+      session,
+      profile,
+      signUpEmail,
+      signInEmail,
+      signInOAuth,
+      signOut,
+      refreshProfile,
+      authModalOpen,
+      authModalMode,
+      openAuthModal,
+      closeAuthModal,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

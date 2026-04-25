@@ -2,6 +2,7 @@ import { useDictStore } from '../../store/dictStore';
 import { useT } from '../../i18n/useT';
 import { SearchBox } from './SearchBox';
 import { ResultCard } from './ResultCard';
+import { SignupPromptBanner } from '../Auth/SignupPromptBanner';
 
 export function SearchView() {
   const loading = useDictStore((s) => s.loading);
@@ -14,6 +15,7 @@ export function SearchView() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+      <SignupPromptBanner />
       <SearchBox />
 
       {loading && (

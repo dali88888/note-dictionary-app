@@ -9,9 +9,12 @@ export class TranslateError extends Error {
 }
 
 /**
- * Hit /api/translate with the caller's Supabase JWT in the Authorization
- * header.  The serverless function rejects unauthenticated traffic so we
- * don't leak Gemini/Claude quota to anonymous abusers.
+ * Hit /api/translate, attaching the caller's Supabase JWT when one
+ * exists.  Anonymous callers (no session) are allowed — the server
+ * accepts them so visitors can try the dictionary without registering.
+ * When a session IS present we attach the token so the server can
+ * reject expired credentials cleanly instead of silently downgrading
+ * the user to anon mode.
  */
 export async function translateWord(
   word: string,
@@ -27,16 +30,17 @@ export async function translateWord(
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  if (!session) {
-    throw new TranslateError('Not signed in', 401);
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (session) {
+    headers.Authorization = `Bearer ${session.access_token}`;
   }
 
   const res = await fetch('/api/translate', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${session.access_token}`,
-    },
+    headers,
     body: JSON.stringify({ word, language, direction }),
   });
 

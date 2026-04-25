@@ -183,6 +183,23 @@ const DICT = {
     importLegacyDone: (v: Vars) =>
       `已导入 ${v.entries} 条词条 / ${v.sessions} 组课程。`,
     importLegacyFailed: (v: Vars) => `导入失败：${v.msg}`,
+
+    /* Anonymous-mode upsell banner (shown above SearchBox for guests) */
+    signupPromptTitle: '注册账号，构建你的中文知识库',
+    signupPromptBody:
+      '你现在可以直接查词、查例句——免登录，立即可用。注册后还能解锁这些：',
+    signupPromptBullet1: '所有查询自动云端保存，跨设备访问',
+    signupPromptBullet2: '按日期 / 课程归档，随时复习与导出 PPT',
+    signupPromptBullet3: '后续将支持自动出题、错题本等复习功能',
+    signupPromptBullet4: '注册为教师后，可为多名学生分别建立独立词库',
+    signupPromptCtaSignup: '免费注册',
+    signupPromptCtaLogin: '已有账号？登录',
+    signupPromptDismiss: '关闭',
+
+    /* Anonymous-mode history empty-state */
+    historyAnonTitle: '历史记录需要登录',
+    historyAnonBody:
+      '匿名查询不会保存到云端。注册后，你的所有查询会自动按日期与课程归档，方便日后复习和导出 PPT。',
   },
   en: {
     appTitle: 'Classroom Chinese Lookup',
@@ -363,6 +380,23 @@ const DICT = {
     importLegacyDone: (v: Vars) =>
       `Imported ${v.entries} ${Number(v.entries) === 1 ? 'entry' : 'entries'} / ${v.sessions} session${Number(v.sessions) === 1 ? '' : 's'}.`,
     importLegacyFailed: (v: Vars) => `Import failed: ${v.msg}`,
+
+    /* Anonymous-mode upsell banner (shown above SearchBox for guests) */
+    signupPromptTitle: 'Sign up to build your Chinese knowledge base',
+    signupPromptBody:
+      'You can look up words right now — no sign-in required. Register to unlock:',
+    signupPromptBullet1: 'Cloud-saved queries, available on every device',
+    signupPromptBullet2: 'Auto archive by date / class, review and export to PPT anytime',
+    signupPromptBullet3: 'Coming soon: auto-generated quizzes & spaced review',
+    signupPromptBullet4: 'Sign up as a teacher to manage separate folders for each student',
+    signupPromptCtaSignup: 'Sign up — free',
+    signupPromptCtaLogin: 'Already have an account? Sign in',
+    signupPromptDismiss: 'Dismiss',
+
+    /* Anonymous-mode history empty-state */
+    historyAnonTitle: 'History requires an account',
+    historyAnonBody:
+      'Anonymous queries are not saved to the cloud. Sign up and every lookup is auto-archived by date and class, ready for review or PPT export.',
   },
 } as const satisfies Record<UILang, Record<string, string | ((v: Vars) => string)>>;
 

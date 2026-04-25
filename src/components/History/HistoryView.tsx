@@ -7,6 +7,7 @@ import { Button } from '../UI/Button';
 import { Toggle } from '../UI/Toggle';
 import { ChineseLine } from '../Common/ChineseLine';
 import { exportToPptx } from '../../export/exportPptx';
+import { useAuth } from '../../auth/AuthContext';
 
 type Tab = 'all' | 'date' | 'class';
 
@@ -24,7 +25,44 @@ export function HistoryView() {
   const deleteEntry = useDictStore((s) => s.deleteEntry);
   const deleteSession = useDictStore((s) => s.deleteSession);
   const collectEntries = useDictStore((s) => s.collectEntries);
+  const { status: authStatus, openAuthModal } = useAuth();
   const { t } = useT();
+
+  // Anonymous users have no persisted history.  Rather than showing
+  // empty tabs (which would let them bang on filters they can't fill),
+  // dedicate the whole pane to a single sign-in invitation that
+  // explains what they get.
+  if (authStatus === 'anon') {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-12">
+        <div className="bg-white rounded-xl border border-stone-200 p-8 text-center">
+          <div className="text-3xl mb-2" aria-hidden="true">📚</div>
+          <h2 className="text-base font-semibold text-stone-800">
+            {t('historyAnonTitle')}
+          </h2>
+          <p className="text-sm text-stone-600 mt-2 max-w-md mx-auto">
+            {t('historyAnonBody')}
+          </p>
+          <div className="mt-5 flex items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => openAuthModal('signup')}
+              className="text-sm font-medium px-4 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              {t('signupPromptCtaSignup')}
+            </button>
+            <button
+              type="button"
+              onClick={() => openAuthModal('login')}
+              className="text-sm text-stone-600 hover:text-stone-900 px-3 py-2"
+            >
+              {t('signupPromptCtaLogin')}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const [tab, setTab] = useState<Tab>('all');
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());

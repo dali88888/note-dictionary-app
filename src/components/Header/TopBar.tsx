@@ -5,6 +5,7 @@ import { Toggle } from '../UI/Toggle';
 import { SessionBar } from '../Session/SessionBar';
 import { UserMenu } from './UserMenu';
 import { StudentSwitcher } from './StudentSwitcher';
+import { useAuth } from '../../auth/AuthContext';
 
 type View = 'search' | 'history';
 
@@ -18,7 +19,10 @@ export function TopBar({ view, onChangeView }: Props) {
   const showPinyin = useDictStore((s) => s.prefs.showPinyin);
   const setUILanguage = useDictStore((s) => s.setUILanguage);
   const setShowPinyin = useDictStore((s) => s.setShowPinyin);
+  const { status, openAuthModal } = useAuth();
   const { t } = useT();
+
+  const isAuthed = status === 'authed';
 
   return (
     <header className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-stone-200">
@@ -74,11 +78,40 @@ export function TopBar({ view, onChangeView }: Props) {
             onChange={setShowPinyin}
           />
 
-          <div className="h-5 w-px bg-stone-300" />
-          <StudentSwitcher />
-          <SessionBar />
-          <div className="h-5 w-px bg-stone-300" />
-          <UserMenu />
+          {isAuthed ? (
+            <>
+              {/* Authed users: show class controls + (teachers only)
+                  student switcher + user menu. */}
+              <div className="h-5 w-px bg-stone-300" />
+              <StudentSwitcher />
+              <SessionBar />
+              <div className="h-5 w-px bg-stone-300" />
+              <UserMenu />
+            </>
+          ) : (
+            <>
+              {/* Anonymous users: two compact buttons that open the auth
+                  modal.  Class controls / user menu are hidden because
+                  they don't apply.  The "登录" / "注册" choice is just a
+                  default for the modal's initial tab — both buttons open
+                  the same modal. */}
+              <div className="h-5 w-px bg-stone-300" />
+              <button
+                type="button"
+                onClick={() => openAuthModal('login')}
+                className="text-sm text-stone-600 hover:text-stone-900 px-2 py-1"
+              >
+                {t('loginTab')}
+              </button>
+              <button
+                type="button"
+                onClick={() => openAuthModal('signup')}
+                className="text-sm font-medium px-3 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                {t('signupTab')}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </header>
