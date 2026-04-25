@@ -1,4 +1,4 @@
-import type { TranslateResponse } from '../types/dictionary';
+import type { TranslateResponse, TranslationDirection } from '../types/dictionary';
 
 export class TranslateError extends Error {
   constructor(message: string, public status?: number) {
@@ -10,11 +10,12 @@ export class TranslateError extends Error {
 export async function translateWord(
   word: string,
   language: string,
+  direction: TranslationDirection = 'zh-to-other',
 ): Promise<TranslateResponse> {
   const res = await fetch('/api/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ word, language }),
+    body: JSON.stringify({ word, language, direction }),
   });
 
   if (!res.ok) {
@@ -29,7 +30,11 @@ export async function translateWord(
   }
 
   const data = (await res.json()) as TranslateResponse;
-  if (!data?.meanings?.length || !data.wordSyllables?.length) {
+  if (!data?.meanings?.length) {
+    throw new TranslateError('AI 返回的数据格式不完整');
+  }
+  // Forward direction MUST have wordSyllables. Reverse direction may have empty array.
+  if (direction === 'zh-to-other' && !data.wordSyllables?.length) {
     throw new TranslateError('AI 返回的数据格式不完整');
   }
   return data;

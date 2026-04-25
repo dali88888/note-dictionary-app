@@ -41,17 +41,40 @@ const DICT = {
     start: '开始',
 
     searchPlaceholder: '输入中文词，如：长、打、一带一路',
+    reverseSearchPlaceholder: '输入任意语言（如 happy / je suis fatigué / ありがとう / "I want 一杯 coffee"）',
     searchBtn: '查询',
     searchLoading: '查询中…',
     searchHint: '回车查询 · 查询记录自动保存',
 
+    /* Direction toggle */
+    dirZhToOther: '中文 → 外语',
+    dirOtherToZh: '外语 → 中文',
+    dirZhToOtherShort: '中→外',
+    dirOtherToZhShort: '外→中',
+    targetIsChinese: '→ 中文',
+    detectedLanguage: (v: Vars) => `检测语言：${v.lang}`,
+
     queryFailed: (v: Vars) => `查询失败：${v.msg}`,
     emptyHint: '在上方输入中文词开始查询。所有查询会自动按日期归档，课后可导出为 PPT。',
+    emptyHintReverse: '在上方输入任意语言的词或句子，系统会给出地道的中文表达。',
 
     translatedToLine: (v: Vars) => `翻译至 ${v.lang} · ${v.n} 个义项`,
+    chineseCandidatesLine: (v: Vars) => `从 ${v.lang} 译为中文 · ${v.n} 个候选词`,
+    chineseCandidatesLineSingle: (v: Vars) => `从 ${v.lang} 译为中文`,
+    usageNote: '用法说明',
     pronunciation: '读音：',
     example: '例句',
     deleteRecord: '删除此记录',
+
+    /* Register labels (other→zh) */
+    registerCasual: '口语',
+    registerColloquial: '通俗',
+    registerNeutral: '中性',
+    registerFormal: '正式',
+    registerLiterary: '书面',
+    /* Direction badges shown in history */
+    dirBadgeZhToOther: '中→外',
+    dirBadgeOtherToZh: '外→中',
 
     tabAll: '全部查询',
     tabByDate: '按日期',
@@ -115,19 +138,45 @@ const DICT = {
     start: 'Start',
 
     searchPlaceholder: 'Enter a Chinese word (e.g. 长, 打, 一带一路)',
+    reverseSearchPlaceholder:
+      'Enter any language (e.g. happy / je suis fatigué / ありがとう / "I want 一杯 coffee")',
     searchBtn: 'Search',
     searchLoading: 'Searching…',
     searchHint: 'Press Enter to search · auto-saved to history',
 
+    /* Direction toggle */
+    dirZhToOther: 'Chinese → Other',
+    dirOtherToZh: 'Other → Chinese',
+    dirZhToOtherShort: 'ZH→',
+    dirOtherToZhShort: '→ZH',
+    targetIsChinese: '→ Chinese',
+    detectedLanguage: (v: Vars) => `Detected: ${v.lang}`,
+
     queryFailed: (v: Vars) => `Query failed: ${v.msg}`,
     emptyHint:
       'Enter a Chinese word above to start. Queries are auto-archived by date and can be exported as PPT after class.',
+    emptyHintReverse:
+      'Enter a word or sentence in any language and get idiomatic Chinese expressions.',
 
     translatedToLine: (v: Vars) =>
       `Translated to ${v.lang} · ${v.n} meaning${Number(v.n) === 1 ? '' : 's'}`,
+    chineseCandidatesLine: (v: Vars) =>
+      `${v.lang} → Chinese · ${v.n} candidate${Number(v.n) === 1 ? '' : 's'}`,
+    chineseCandidatesLineSingle: (v: Vars) => `${v.lang} → Chinese`,
+    usageNote: 'When to use',
     pronunciation: 'Pron.: ',
     example: 'Example',
     deleteRecord: 'Delete this record',
+
+    /* Register labels (other→zh) */
+    registerCasual: 'casual',
+    registerColloquial: 'colloquial',
+    registerNeutral: 'neutral',
+    registerFormal: 'formal',
+    registerLiterary: 'literary',
+    /* Direction badges shown in history */
+    dirBadgeZhToOther: 'ZH→',
+    dirBadgeOtherToZh: '→ZH',
 
     tabAll: 'All',
     tabByDate: 'By date',

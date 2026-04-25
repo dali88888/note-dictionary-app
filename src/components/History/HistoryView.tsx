@@ -217,33 +217,63 @@ function AllEntriesList({
   }
   return (
     <ul className="divide-y divide-stone-200 bg-white rounded-xl border border-stone-200">
-      {entries.map((entry) => (
-        <li key={entry.id} className="p-3 flex items-start gap-3">
-          <div className="flex-1 min-w-0">
-            <ChineseLine
-              syllables={entry.wordSyllables}
-              showPinyin={showPinyin}
-              size="md"
-            />
-            <div className="text-xs text-stone-500 mt-0.5">
-              {t('allEntriesSub', {
-                lang: entry.language,
-                time: formatDateTime(entry.queriedAt),
-                n: entry.meanings.length,
-              })}
+      {entries.map((entry) => {
+        const isReverse = entry.direction === 'other-to-zh';
+        const firstCandidate = isReverse ? entry.meanings[0]?.hanziSyllables : null;
+        return (
+          <li key={entry.id} className="p-3 flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                    isReverse
+                      ? 'bg-violet-50 text-violet-700 border-violet-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}
+                >
+                  {t(isReverse ? 'dirBadgeOtherToZh' : 'dirBadgeZhToOther')}
+                </span>
+                {isReverse ? (
+                  <span className="text-base text-stone-900 font-semibold break-words">
+                    {entry.word}
+                  </span>
+                ) : (
+                  <ChineseLine
+                    syllables={entry.wordSyllables}
+                    showPinyin={showPinyin}
+                    size="md"
+                  />
+                )}
+              </div>
+              {isReverse && firstCandidate && firstCandidate.length > 0 && (
+                <div className="mt-1 ml-1">
+                  <ChineseLine
+                    syllables={firstCandidate}
+                    showPinyin={showPinyin}
+                    size="md"
+                  />
+                </div>
+              )}
+              <div className="text-xs text-stone-500 mt-0.5">
+                {t('allEntriesSub', {
+                  lang: entry.language,
+                  time: formatDateTime(entry.queriedAt),
+                  n: entry.meanings.length,
+                })}
+              </div>
+              <p className="text-sm text-stone-700 mt-1 truncate">
+                {entry.meanings[0]?.definition}
+              </p>
             </div>
-            <p className="text-sm text-stone-700 mt-1 truncate">
-              {entry.meanings[0]?.definition}
-            </p>
-          </div>
-          <button
-            onClick={() => onDelete(entry.id)}
-            className="text-stone-400 hover:text-red-600 text-xs px-2"
-          >
-            {t('delete')}
-          </button>
-        </li>
-      ))}
+            <button
+              onClick={() => onDelete(entry.id)}
+              className="text-stone-400 hover:text-red-600 text-xs px-2"
+            >
+              {t('delete')}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -323,14 +353,30 @@ function SessionGroupList({
             </div>
             {entries.length > 0 && (
               <div className="mt-2 pl-7 flex flex-wrap gap-1.5">
-                {entries.slice(0, 20).map((e) => (
-                  <span
-                    key={e.id}
-                    className="text-sm bg-stone-100 text-stone-700 px-2 py-0.5 rounded"
-                  >
-                    {e.word}
-                  </span>
-                ))}
+                {entries.slice(0, 20).map((e) => {
+                  const isReverse = e.direction === 'other-to-zh';
+                  // For reverse: show the first Chinese candidate as the chip text (more
+                  // useful than the source-language input). Fall back to the original
+                  // input if no hanzi candidate present.
+                  const chipText = isReverse
+                    ? e.meanings[0]?.hanziSyllables
+                        ?.map((s) => s.hanzi)
+                        .join('') || e.word
+                    : e.word;
+                  return (
+                    <span
+                      key={e.id}
+                      className={`text-sm px-2 py-0.5 rounded ${
+                        isReverse
+                          ? 'bg-violet-50 text-violet-700 border border-violet-200'
+                          : 'bg-stone-100 text-stone-700'
+                      }`}
+                      title={isReverse ? e.word : undefined}
+                    >
+                      {chipText}
+                    </span>
+                  );
+                })}
                 {entries.length > 20 && (
                   <span className="text-xs text-stone-400 self-center">
                     {t('moreN', { n: entries.length - 20 })}

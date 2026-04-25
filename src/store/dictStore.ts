@@ -4,6 +4,7 @@ import type {
   ClassSession,
   DictionaryEntry,
   ExportOptions,
+  TranslationDirection,
 } from '../types/dictionary';
 import { translateWord } from '../api/translateClient';
 import type { UILang } from '../i18n';
@@ -29,7 +30,7 @@ interface DictState {
   loading: boolean;
   error: string | null;
 
-  query: (word: string) => Promise<void>;
+  query: (word: string, direction?: TranslationDirection) => Promise<void>;
   clearLatest: () => void;
   deleteEntry: (entryId: string) => void;
 
@@ -93,19 +94,25 @@ export const useDictStore = create<DictState>()(
       loading: false,
       error: null,
 
-      query: async (rawWord: string) => {
+      query: async (rawWord: string, direction: TranslationDirection = 'zh-to-other') => {
         const word = rawWord.trim();
         if (!word) return;
         set({ loading: true, error: null });
         try {
           const { prefs } = get();
-          const data = await translateWord(word, prefs.language);
+          const data = await translateWord(word, prefs.language, direction);
           const ts = Date.now();
           const entry: DictionaryEntry = {
             ...data,
-            // Gemini sometimes mis-fills the language echo field; force it
-            // to whatever the user actually requested so the UI stays consistent.
-            language: prefs.language,
+            direction,
+            // For zh→other: Gemini sometimes mis-fills `language`, so we override with
+            // the user's selected target.
+            // For other→zh: trust the AI's auto-detected source language; fall back
+            // to whatever we got, and finally to "auto".
+            language:
+              direction === 'zh-to-other'
+                ? prefs.language
+                : data.language?.trim() || 'auto',
             id: uid(),
             queriedAt: ts,
           };

@@ -3,9 +3,11 @@ import type {
   ClassSession,
   DictionaryEntry,
   ExportOptions,
+  Meaning,
+  Register,
   Syllable,
 } from '../types/dictionary';
-import { translate, type UILang } from '../i18n';
+import { translate, type StringKey, type UILang } from '../i18n';
 
 /* ────────────────────────────────────────────────────────────────
  * Slide geometry (16:9, 10 × 5.625 inch)
@@ -316,8 +318,25 @@ const DEF_PT = 13;
 const EX_LABEL_PT = 10;
 const EX_TRANS_PT = 11;
 
-const RUBY_WORD_STYLE = rubyStyle(42, 14); // large, for the title word
+const RUBY_WORD_STYLE = rubyStyle(42, 14); // large, for the title word (forward mode)
 const RUBY_EX_STYLE = rubyStyle(16, 9); // body-sized, for example sentences
+const RUBY_CAND_STYLE = rubyStyle(28, 11); // medium-large, for Chinese candidates (reverse mode)
+
+/* Reverse-mode register pill colors — mirrored from the React UI. */
+const REGISTER_KEY: Record<Register, StringKey> = {
+  casual: 'registerCasual',
+  colloquial: 'registerColloquial',
+  neutral: 'registerNeutral',
+  formal: 'registerFormal',
+  literary: 'registerLiterary',
+};
+const REGISTER_PPT_COLOR: Record<Register, { bg: string; fg: string }> = {
+  casual: { bg: 'FCE7F3', fg: 'BE185D' },     // pink-100  / pink-700
+  colloquial: { bg: 'DBEAFE', fg: '1D4ED8' }, // blue-100  / blue-700
+  neutral: { bg: 'F5F5F4', fg: '57534E' },    // stone-100 / stone-700
+  formal: { bg: 'D1FAE5', fg: '047857' },     // emerald-100 / emerald-700
+  literary: { bg: 'EDE9FE', fg: '6D28D9' },   // violet-100 / violet-700
+};
 
 /** Compute total height a single meaning block will consume. */
 function measureMeaningHeight(
@@ -522,68 +541,380 @@ function addMeaningBlock(
   return y + 0.18;
 }
 
+/* ────────────────────────────────────────────────────────────────
+ * Reverse-mode (other→zh) header & meaning block.
+ *
+ * Layout:
+ *   ┌──────────────────────────────────────────────────────────────┐
+ *   │                       (header: lang · date)                  │
+ *   │                                                              │
+ *   │                       Source-language word                   │
+ *   │                  English → Chinese · 3 candidates             │
+ *   │  ───────────────────── rule ──────────────────────            │
+ *   │                                                              │
+ *   │  ① 高 兴   [casual]   [adjective]                              │
+ *   │      gāo xìng                                                 │
+ *   │     When to use:                                              │
+ *   │     Everyday spoken expression for being happy...             │
+ *   │     Example:                                                  │
+ *   │     wǒ hěn gāo xìng                                           │
+ *   │     我 很 高 兴 。                                             │
+ *   │     I'm very happy.                                           │
+ *   └──────────────────────────────────────────────────────────────┘
+ * ─────────────────────────────────────────────────────────────── */
+
+function addReverseEntryHeader(
+  slide: PptxGenJS.Slide,
+  entry: DictionaryEntry,
+  uiLang: UILang,
+): number {
+  // Top-right header: detected source language + date
+  slide.addText(`${entry.language} · ${formatDate(entry.queriedAt)}`, {
+    x: MARGIN_X,
+    y: MARGIN_TOP,
+    w: CONTENT_W,
+    h: 0.25,
+    fontSize: 9,
+    color: COLOR.faint,
+    align: 'right',
+    fontFace: FONT_LATIN,
+    margin: 0,
+  });
+
+  // Source-language word/phrase, plain text, large bold, centered.
+  // Use a generous height so long sentences wrap.
+  const titleY = MARGIN_TOP + 0.35;
+  const titleH = 1.0;
+  slide.addText(entry.word, {
+    x: CONTENT_LEFT,
+    y: titleY,
+    w: CONTENT_W,
+    h: titleH,
+    fontSize: 28,
+    bold: true,
+    fontFace: FONT_LATIN,
+    color: COLOR.heading,
+    align: 'center',
+    valign: 'middle',
+    margin: 0,
+  });
+  let afterY = titleY + titleH;
+
+  // Subline: "X → Chinese · N candidate(s)"
+  const n = entry.meanings.length;
+  const subLine =
+    n > 1
+      ? translate(uiLang, 'chineseCandidatesLine', { lang: entry.language, n })
+      : translate(uiLang, 'chineseCandidatesLineSingle', {
+          lang: entry.language,
+        });
+  slide.addText(subLine, {
+    x: CONTENT_LEFT,
+    y: afterY + 0.05,
+    w: CONTENT_W,
+    h: 0.3,
+    fontSize: 11,
+    fontFace: FONT_LATIN,
+    color: COLOR.muted,
+    align: 'center',
+    valign: 'middle',
+    margin: 0,
+  });
+  afterY += 0.4;
+
+  const ruleY = afterY + 0.1;
+  slide.addShape('line' as unknown as PptxGenJS.ShapeType, {
+    x: MARGIN_X,
+    y: ruleY,
+    w: CONTENT_W,
+    h: 0,
+    line: { color: COLOR.rule, width: 0.75 },
+  });
+  return ruleY + 0.18;
+}
+
+function measureReverseMeaningHeight(
+  m: Meaning,
+  includePinyin: boolean,
+  includeTranslation: boolean,
+): number {
+  let h = 0;
+  // Chinese candidate ruby
+  const candidate = m.hanziSyllables ?? [];
+  h += estimateRubyH(candidate, CONTENT_W - 0.45, includePinyin, RUBY_CAND_STYLE);
+  // Register pill + POS row
+  h += 0.3;
+  // "When to use" label
+  h += 0.24;
+  // Definition
+  h += estimateLatinH(m.definition, DEF_PT, MEANING_W) + 0.08;
+  // Example label
+  h += 0.24;
+  // Example ruby
+  h += estimateRubyH(m.example.chinese, MEANING_W, includePinyin, RUBY_EX_STYLE);
+  // Translation
+  if (includeTranslation) {
+    h += estimateLatinH(m.example.translation, EX_TRANS_PT, MEANING_W) + 0.05;
+  }
+  // Trailing gap
+  h += 0.25;
+  return h;
+}
+
+function addReverseMeaningBlock(
+  slide: PptxGenJS.Slide,
+  m: Meaning,
+  idx: number,
+  startY: number,
+  opts: ExportOptions,
+  uiLang: UILang,
+): number {
+  const marker = CIRCLED[idx] ?? `${idx + 1}.`;
+  let y = startY;
+
+  // Marker — sits to the left of the candidate ruby. Use the ruby's hanzi cell
+  // height as the visual baseline so the number sits at character-height.
+  const markerH = RUBY_CAND_STYLE.hanziH + (opts.includePinyin ? RUBY_CAND_STYLE.pinyinH : 0);
+  slide.addText(marker, {
+    x: MARGIN_X,
+    y,
+    w: 0.45,
+    h: markerH,
+    fontSize: 18,
+    bold: true,
+    color: COLOR.accent,
+    fontFace: FONT_LATIN,
+    align: 'left',
+    valign: opts.includePinyin ? 'bottom' : 'middle',
+    margin: 0,
+  });
+
+  // Chinese candidate (ruby), indented past the marker
+  const candidate = m.hanziSyllables ?? [];
+  if (candidate.length) {
+    y = addRuby(slide, candidate, {
+      x: MARGIN_X + 0.45,
+      y,
+      maxRowW: CONTENT_W - 0.45,
+      showPinyin: opts.includePinyin,
+      style: RUBY_CAND_STYLE,
+      center: false,
+    });
+  } else {
+    y += 0.3;
+  }
+
+  // Register pill + POS tag, on a single line, indented under the candidate.
+  const reg = m.register;
+  let pillX = MARGIN_X + MEANING_INDENT;
+  const pillRowH = 0.24;
+  if (reg) {
+    const colors = REGISTER_PPT_COLOR[reg];
+    const label = translate(uiLang, REGISTER_KEY[reg]);
+    const pillW = 0.85;
+    slide.addText(label, {
+      x: pillX,
+      y,
+      w: pillW,
+      h: pillRowH,
+      fontSize: 9,
+      fontFace: FONT_LATIN,
+      color: colors.fg,
+      bold: true,
+      fill: { color: colors.bg },
+      align: 'center',
+      valign: 'middle',
+      margin: 0,
+    });
+    pillX += pillW + 0.08;
+  }
+  slide.addText(`[${m.partOfSpeech}]`, {
+    x: pillX,
+    y,
+    w: CONTENT_W - (pillX - MARGIN_X),
+    h: pillRowH,
+    fontSize: 9,
+    italic: true,
+    fontFace: FONT_LATIN,
+    color: COLOR.muted,
+    align: 'left',
+    valign: 'middle',
+    margin: 0,
+  });
+  y += pillRowH + 0.08;
+
+  // "When to use" label
+  slide.addText(translate(uiLang, 'usageNote'), {
+    x: MARGIN_X + MEANING_INDENT,
+    y,
+    w: MEANING_W,
+    h: 0.22,
+    fontSize: EX_LABEL_PT,
+    fontFace: FONT_LATIN,
+    color: COLOR.muted,
+    align: 'left',
+    valign: 'bottom',
+    margin: 0,
+  });
+  y += 0.24;
+
+  // Definition (usage note in source language)
+  const defH = Math.max(
+    0.3,
+    estimateLatinH(m.definition, DEF_PT, MEANING_W),
+  );
+  slide.addText(m.definition, {
+    x: MARGIN_X + MEANING_INDENT,
+    y,
+    w: MEANING_W,
+    h: defH,
+    fontSize: DEF_PT,
+    fontFace: FONT_LATIN,
+    color: COLOR.body,
+    valign: 'top',
+    align: 'left',
+    margin: 0,
+  });
+  y += defH + 0.08;
+
+  // Example label
+  slide.addText(translate(uiLang, 'example'), {
+    x: MARGIN_X + MEANING_INDENT,
+    y,
+    w: MEANING_W,
+    h: 0.22,
+    fontSize: EX_LABEL_PT,
+    fontFace: FONT_LATIN,
+    color: COLOR.muted,
+    align: 'left',
+    valign: 'bottom',
+    margin: 0,
+  });
+  y += 0.24;
+
+  // Ruby example
+  y = addRuby(slide, m.example.chinese, {
+    x: MARGIN_X + MEANING_INDENT,
+    y,
+    maxRowW: MEANING_W,
+    showPinyin: opts.includePinyin,
+    style: RUBY_EX_STYLE,
+    center: false,
+  });
+
+  // Translation (in source language)
+  if (opts.includeExampleTranslation) {
+    const trH = Math.max(
+      0.25,
+      estimateLatinH(m.example.translation, EX_TRANS_PT, MEANING_W),
+    );
+    slide.addText(m.example.translation, {
+      x: MARGIN_X + MEANING_INDENT,
+      y,
+      w: MEANING_W,
+      h: trH,
+      fontSize: EX_TRANS_PT,
+      fontFace: FONT_LATIN,
+      color: COLOR.muted,
+      italic: true,
+      align: 'left',
+      valign: 'top',
+      margin: 0,
+    });
+    y += trH + 0.05;
+  }
+
+  return y + 0.2;
+}
+
+/* ────────────────────────────────────────────────────────────────
+ * Continuation slide header (used by both directions when a single entry
+ * spans more than one slide).
+ * ─────────────────────────────────────────────────────────────── */
+
+function addContinuationHeader(
+  slide: PptxGenJS.Slide,
+  entry: DictionaryEntry,
+): number {
+  const isReverse = entry.direction === 'other-to-zh';
+  // Title varies per direction: hanzi (forward) or original input (reverse).
+  const titleText = isReverse
+    ? entry.word + '  …'
+    : entry.wordSyllables.map((s) => s.hanzi).join('') + '  …';
+  slide.addText(titleText, {
+    x: MARGIN_X,
+    y: MARGIN_TOP,
+    w: CONTENT_W,
+    h: 0.35,
+    fontSize: 18,
+    bold: true,
+    fontFace: isReverse ? FONT_LATIN : FONT_CJK,
+    color: COLOR.heading,
+    align: 'left',
+    valign: 'middle',
+    margin: 0,
+  });
+  slide.addText(`${entry.language} · ${formatDate(entry.queriedAt)}`, {
+    x: MARGIN_X,
+    y: MARGIN_TOP,
+    w: CONTENT_W,
+    h: 0.35,
+    fontSize: 9,
+    color: COLOR.faint,
+    align: 'right',
+    fontFace: FONT_LATIN,
+    margin: 0,
+  });
+  slide.addShape('line' as unknown as PptxGenJS.ShapeType, {
+    x: MARGIN_X,
+    y: MARGIN_TOP + 0.45,
+    w: CONTENT_W,
+    h: 0,
+    line: { color: COLOR.rule, width: 0.75 },
+  });
+  return MARGIN_TOP + 0.6;
+}
+
 function buildEntrySlides(
   pres: PptxGenJS,
   entry: DictionaryEntry,
   opts: ExportOptions,
   uiLang: UILang,
 ) {
+  const isReverse = entry.direction === 'other-to-zh';
+
   // Start first slide with full header
   let slide = pres.addSlide();
   slide.background = { color: COLOR.bg };
-  let y = addEntryHeader(slide, entry, opts.includePinyin);
+  let y = isReverse
+    ? addReverseEntryHeader(slide, entry, uiLang)
+    : addEntryHeader(slide, entry, opts.includePinyin);
   const availableBottom = SLIDE_H - MARGIN_BOTTOM - 0.3; // leave room for footer
 
   entry.meanings.forEach((m, idx) => {
-    const needed = measureMeaningHeight(
-      m,
-      opts.includePinyin,
-      opts.includeExampleTranslation,
-    );
+    const needed = isReverse
+      ? measureReverseMeaningHeight(
+          m,
+          opts.includePinyin,
+          opts.includeExampleTranslation,
+        )
+      : measureMeaningHeight(
+          m,
+          opts.includePinyin,
+          opts.includeExampleTranslation,
+        );
 
     // If this meaning won't fit, flush footer + start a continuation slide.
     if (y + needed > availableBottom && idx > 0) {
       addFooter(slide, translate(uiLang, 'pptFooterBrand'));
       slide = pres.addSlide();
       slide.background = { color: COLOR.bg };
-
-      // Continuation header: small pinyin+hanzi plus " (continued)"
-      const subHanzi = entry.wordSyllables.map((s) => s.hanzi).join('');
-      slide.addText(subHanzi + '  …', {
-        x: MARGIN_X,
-        y: MARGIN_TOP,
-        w: CONTENT_W,
-        h: 0.35,
-        fontSize: 18,
-        bold: true,
-        fontFace: FONT_CJK,
-        color: COLOR.heading,
-        align: 'left',
-        valign: 'middle',
-        margin: 0,
-      });
-      slide.addText(`${entry.language} · ${formatDate(entry.queriedAt)}`, {
-        x: MARGIN_X,
-        y: MARGIN_TOP,
-        w: CONTENT_W,
-        h: 0.35,
-        fontSize: 9,
-        color: COLOR.faint,
-        align: 'right',
-        fontFace: FONT_LATIN,
-        margin: 0,
-      });
-      slide.addShape('line' as unknown as PptxGenJS.ShapeType, {
-        x: MARGIN_X,
-        y: MARGIN_TOP + 0.45,
-        w: CONTENT_W,
-        h: 0,
-        line: { color: COLOR.rule, width: 0.75 },
-      });
-      y = MARGIN_TOP + 0.6;
+      y = addContinuationHeader(slide, entry);
     }
 
-    y = addMeaningBlock(slide, m, idx, y, opts, uiLang);
+    y = isReverse
+      ? addReverseMeaningBlock(slide, m, idx, y, opts, uiLang)
+      : addMeaningBlock(slide, m, idx, y, opts, uiLang);
   });
 
   addFooter(slide, translate(uiLang, 'pptFooterBrand'));

@@ -1,6 +1,10 @@
 /**
  * POST /api/translate
- * Body: { word: string, language: string }
+ * Body: {
+ *   word: string,
+ *   language: string,                                    // ignored when direction = "other-to-zh"
+ *   direction?: "zh-to-other" | "other-to-zh"            // default "zh-to-other"
+ * }
  * Response: TranslateResponse (JSON) — see src/types/dictionary.ts
  *
  * Runs on Vercel Edge Runtime — zero npm deps, uses fetch directly.
@@ -9,9 +13,12 @@
 
 export const config = { runtime: 'edge' };
 
+type Direction = 'zh-to-other' | 'other-to-zh';
+
 interface TranslateRequest {
   word: string;
   language: string;
+  direction?: Direction;
 }
 
 // Mirror of TranslateResponse — duplicated here so the API package has no
@@ -20,17 +27,24 @@ interface ApiSyllable { hanzi: string; pinyin: string }
 interface ApiMeaning {
   partOfSpeech: string;
   pinyin?: string;
+  hanziSyllables?: ApiSyllable[];
+  register?: 'casual' | 'colloquial' | 'neutral' | 'formal' | 'literary';
   definition: string;
   example: { chinese: ApiSyllable[]; translation: string };
 }
 interface ApiResponse {
   word: string;
+  direction?: Direction;
   wordSyllables: ApiSyllable[];
   language: string;
   meanings: ApiMeaning[];
 }
 
-const SYSTEM_PROMPT = (word: string, language: string) => `你是一位专业的中文词典编辑，为非母语学习者编写词条。
+/* ────────────────────────────────────────────────────────────────
+ * Prompts
+ * ─────────────────────────────────────────────────────────────── */
+
+const FORWARD_PROMPT = (word: string, language: string) => `你是一位专业的中文词典编辑，为非母语学习者编写词条。
 
 对中文词"${word}"提供详细解释，翻译目标语言为 ${language}。
 
@@ -44,22 +58,54 @@ const SYSTEM_PROMPT = (word: string, language: string) => `你是一位专业的
 7. pinyin 使用带声调的带调标字母（例如 "hǎo"、"zhōng"、"cháng"），不要使用数字声调。
 8. 只返回 JSON，严格符合提供的 schema，不要添加任何其他文字。`;
 
-const GEMINI_SCHEMA = {
+const REVERSE_PROMPT = (word: string) => `You are an expert Chinese language teacher who helps non-native learners find idiomatic Chinese expressions. The learner can input a word, phrase, or full sentence in ANY language (or even a mix of multiple languages, e.g. English + Japanese, or English with some Chinese inserted).
+
+The learner's input is:
+"""
+${word}
+"""
+
+Tasks:
+1. Auto-detect the source language(s). Set the "language" field to the language name (e.g. "English", "Français", "日本語"). If the input is mixed, write something like "Mixed: English + Japanese". Use the language's own native name when possible.
+2. Decide whether the input is a SINGLE WORD/PHRASE or a FULL SENTENCE:
+   - WORD/PHRASE → produce 2-5 distinct Chinese candidate translations as separate meaning objects, ordered from most common/neutral to more marked. The whole point is to help the learner pick the right one for the situation.
+   - FULL SENTENCE → produce exactly ONE meaning containing the single best idiomatic Chinese rendering.
+3. For each meaning fill these fields:
+   - partOfSpeech: written in the SOURCE LANGUAGE (e.g. "adjective", "verb", "expression", "形容詞")
+   - register: REQUIRED, one of "casual" (slangy/informal), "colloquial" (everyday spoken), "neutral" (works anywhere), "formal" (official/business), "literary" (written/poetic/classical-flavored)
+   - hanziSyllables: the Chinese candidate broken per-character. Each entry { hanzi, pinyin }. Punctuation marks each occupy one entry with pinyin: "".
+   - definition: 1-2 sentences IN THE SOURCE LANGUAGE explaining the nuance — when to use this candidate, what register/situation it fits, and how it differs from the other candidates. Be concrete; mention spoken vs written, formality, emotional tone, regional usage when relevant.
+   - example: { chinese, translation }
+       chinese: a natural, idiomatic Chinese sentence USING THIS CANDIDATE, broken per-character with pinyin.
+       translation: that sentence's equivalent in the SOURCE LANGUAGE.
+4. Top-level fields:
+   - word: echo the learner's original input verbatim.
+   - wordSyllables: ALWAYS return an empty array [] (the learner did not input Chinese — there's nothing to syllabify on the input side).
+   - language: detected source language as described above.
+
+Pinyin uses tone-marked letters ("hǎo", "zhōng", "shén"), never numeric tones.
+
+Return ONLY JSON, strictly conforming to the provided schema. No explanatory text outside the JSON.`;
+
+/* ────────────────────────────────────────────────────────────────
+ * Schemas
+ * ─────────────────────────────────────────────────────────────── */
+
+const SYLLABLE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    hanzi: { type: 'STRING' },
+    pinyin: { type: 'STRING' },
+  },
+  required: ['hanzi', 'pinyin'],
+} as const;
+
+const FORWARD_SCHEMA = {
   type: 'OBJECT',
   properties: {
     word: { type: 'STRING' },
     language: { type: 'STRING' },
-    wordSyllables: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          hanzi: { type: 'STRING' },
-          pinyin: { type: 'STRING' },
-        },
-        required: ['hanzi', 'pinyin'],
-      },
-    },
+    wordSyllables: { type: 'ARRAY', items: SYLLABLE_SCHEMA },
     meanings: {
       type: 'ARRAY',
       items: {
@@ -71,17 +117,7 @@ const GEMINI_SCHEMA = {
           example: {
             type: 'OBJECT',
             properties: {
-              chinese: {
-                type: 'ARRAY',
-                items: {
-                  type: 'OBJECT',
-                  properties: {
-                    hanzi: { type: 'STRING' },
-                    pinyin: { type: 'STRING' },
-                  },
-                  required: ['hanzi', 'pinyin'],
-                },
-              },
+              chinese: { type: 'ARRAY', items: SYLLABLE_SCHEMA },
               translation: { type: 'STRING' },
             },
             required: ['chinese', 'translation'],
@@ -92,19 +128,63 @@ const GEMINI_SCHEMA = {
     },
   },
   required: ['word', 'language', 'wordSyllables', 'meanings'],
-};
+} as const;
+
+const REVERSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    word: { type: 'STRING' },
+    language: { type: 'STRING' },
+    wordSyllables: { type: 'ARRAY', items: SYLLABLE_SCHEMA },
+    meanings: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          partOfSpeech: { type: 'STRING' },
+          register: {
+            type: 'STRING',
+            enum: ['casual', 'colloquial', 'neutral', 'formal', 'literary'],
+          },
+          hanziSyllables: { type: 'ARRAY', items: SYLLABLE_SCHEMA },
+          definition: { type: 'STRING' },
+          example: {
+            type: 'OBJECT',
+            properties: {
+              chinese: { type: 'ARRAY', items: SYLLABLE_SCHEMA },
+              translation: { type: 'STRING' },
+            },
+            required: ['chinese', 'translation'],
+          },
+        },
+        required: [
+          'partOfSpeech',
+          'register',
+          'hanziSyllables',
+          'definition',
+          'example',
+        ],
+      },
+    },
+  },
+  required: ['word', 'language', 'wordSyllables', 'meanings'],
+} as const;
+
+/* ────────────────────────────────────────────────────────────────
+ * AI providers
+ * ─────────────────────────────────────────────────────────────── */
 
 async function callGemini(
-  word: string,
-  language: string,
+  prompt: string,
+  schema: object,
   apiKey: string,
 ): Promise<ApiResponse> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
-    contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT(word, language) }] }],
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: GEMINI_SCHEMA,
+      responseSchema: schema,
       temperature: 0.3,
     },
   };
@@ -129,8 +209,7 @@ async function callGemini(
 }
 
 async function callClaude(
-  word: string,
-  language: string,
+  prompt: string,
   apiKey: string,
 ): Promise<ApiResponse> {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -147,8 +226,8 @@ async function callClaude(
         {
           role: 'user',
           content:
-            SYSTEM_PROMPT(word, language) +
-            '\n\n输出必须是 JSON 对象，字段：word, language, wordSyllables, meanings（结构见要求）。',
+            prompt +
+            '\n\nOutput must be a single JSON object — no prose, no code fences.',
         },
       ],
     }),
@@ -171,6 +250,10 @@ async function callClaude(
   return JSON.parse(cleaned) as ApiResponse;
 }
 
+/* ────────────────────────────────────────────────────────────────
+ * Handler
+ * ─────────────────────────────────────────────────────────────── */
+
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405);
@@ -185,29 +268,48 @@ export default async function handler(req: Request): Promise<Response> {
 
   const word = payload.word?.trim();
   const language = payload.language?.trim();
-  if (!word || !language) {
-    return json({ error: '缺少 word 或 language 参数' }, 400);
+  const direction: Direction =
+    payload.direction === 'other-to-zh' ? 'other-to-zh' : 'zh-to-other';
+
+  if (!word) {
+    return json({ error: '缺少 word 参数' }, 400);
   }
-  if (word.length > 40) {
-    return json({ error: '单次查询长度不能超过 40 个字符' }, 400);
+  // Reverse mode allows longer input (full sentences in any language) — be more lenient.
+  const maxLen = direction === 'other-to-zh' ? 200 : 40;
+  if (word.length > maxLen) {
+    return json({ error: `单次查询长度不能超过 ${maxLen} 个字符` }, 400);
+  }
+  if (direction === 'zh-to-other' && !language) {
+    return json({ error: '缺少 language 参数' }, 400);
   }
 
   const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
+  const prompt =
+    direction === 'other-to-zh'
+      ? REVERSE_PROMPT(word)
+      : FORWARD_PROMPT(word, language);
+  const schema = direction === 'other-to-zh' ? REVERSE_SCHEMA : FORWARD_SCHEMA;
 
   try {
     let result: ApiResponse;
     if (provider === 'claude') {
       const key = process.env.ANTHROPIC_API_KEY;
       if (!key) return json({ error: '服务端未配置 ANTHROPIC_API_KEY' }, 500);
-      result = await callClaude(word, language, key);
+      result = await callClaude(prompt, key);
     } else {
       const key = process.env.GEMINI_API_KEY;
       if (!key) return json({ error: '服务端未配置 GEMINI_API_KEY' }, 500);
-      result = await callGemini(word, language, key);
+      result = await callGemini(prompt, schema, key);
     }
-    // Echo back word/language in case AI normalized them
+    // Echo back word in case AI normalized it
     result.word = result.word || word;
-    result.language = result.language || language;
+    if (direction === 'zh-to-other') {
+      result.language = result.language || language;
+    } else {
+      // Reverse mode: AI fills `language` with detected source. Ensure wordSyllables is empty.
+      result.wordSyllables = [];
+    }
+    result.direction = direction;
     return json(result, 200);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
