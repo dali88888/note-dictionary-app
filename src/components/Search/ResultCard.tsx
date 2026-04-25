@@ -1,5 +1,6 @@
 import type { DictionaryEntry } from '../../types/dictionary';
 import { useDictStore } from '../../store/dictStore';
+import { useT } from '../../i18n/useT';
 import { ChineseLine } from '../Common/ChineseLine';
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
@@ -12,6 +13,7 @@ interface Props {
 export function ResultCard({ entry, onClose }: Props) {
   const showPinyin = useDictStore((s) => s.prefs.showPinyin);
   const deleteEntry = useDictStore((s) => s.deleteEntry);
+  const { t } = useT();
 
   return (
     <div className="fade-in bg-white rounded-xl shadow-sm border border-stone-200 p-6 relative">
@@ -21,7 +23,7 @@ export function ResultCard({ entry, onClose }: Props) {
           onClose?.();
         }}
         className="absolute top-3 right-3 w-7 h-7 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-600"
-        title="删除此记录"
+        title={t('deleteRecord')}
       >
         ×
       </button>
@@ -29,9 +31,7 @@ export function ResultCard({ entry, onClose }: Props) {
       <div className="mb-5">
         <ChineseLine syllables={entry.wordSyllables} showPinyin={showPinyin} size="xl" />
         <div className="mt-2 text-sm text-stone-500">
-          翻译至 <span className="font-medium text-stone-700">{entry.language}</span>
-          {' · '}
-          {entry.meanings.length} 个义项
+          {t('translatedToLine', { lang: entry.language, n: entry.meanings.length })}
         </div>
       </div>
 
@@ -47,7 +47,8 @@ export function ResultCard({ entry, onClose }: Props) {
               </span>
               {m.pinyin && (
                 <span className="text-sm italic text-amber-700">
-                  读音：{m.pinyin}
+                  {t('pronunciation')}
+                  {m.pinyin}
                 </span>
               )}
             </div>
@@ -56,7 +57,7 @@ export function ResultCard({ entry, onClose }: Props) {
             </p>
 
             <div className="mt-2 pl-2 border-l border-stone-200">
-              <div className="text-xs text-stone-500 mb-1">例句</div>
+              <div className="text-xs text-stone-500 mb-1">{t('example')}</div>
               <ChineseLine
                 syllables={m.example.chinese}
                 showPinyin={showPinyin}

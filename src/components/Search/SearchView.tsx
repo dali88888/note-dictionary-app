@@ -1,4 +1,5 @@
 import { useDictStore } from '../../store/dictStore';
+import { useT } from '../../i18n/useT';
 import { SearchBox } from './SearchBox';
 import { ResultCard } from './ResultCard';
 
@@ -9,6 +10,7 @@ export function SearchView() {
   const entry = useDictStore((s) =>
     s.latestEntryId ? s.entries[s.latestEntryId] : null,
   );
+  const { t } = useT();
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
@@ -25,7 +27,7 @@ export function SearchView() {
 
       {!loading && error && (
         <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg px-4 py-3 text-sm">
-          查询失败：{error}
+          {t('queryFailed', { msg: error })}
         </div>
       )}
 
@@ -35,7 +37,7 @@ export function SearchView() {
 
       {!loading && !error && !entry && (
         <div className="text-center text-stone-400 text-sm pt-10">
-          在上方输入中文词开始查询。所有查询会自动按日期归档，课后可导出为 PPT。
+          {t('emptyHint')}
         </div>
       )}
     </div>

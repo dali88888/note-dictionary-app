@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useDictStore } from '../../store/dictStore';
+import { useT } from '../../i18n/useT';
 import { Button } from '../UI/Button';
 
 export function SessionBar() {
@@ -7,6 +8,7 @@ export function SessionBar() {
   const sessions = useDictStore((s) => s.sessions);
   const startManualClass = useDictStore((s) => s.startManualClass);
   const endManualClass = useDictStore((s) => s.endManualClass);
+  const { t } = useT();
 
   const active = activeId ? sessions.find((s) => s.id === activeId) : null;
   const [prompting, setPrompting] = useState(false);
@@ -15,15 +17,15 @@ export function SessionBar() {
   if (active) {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-sm text-stone-500">当前课程</span>
+        <span className="text-sm text-stone-500">{t('currentClass')}</span>
         <span className="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-sm font-medium">
           {active.name}
           <span className="ml-2 text-xs text-amber-700">
-            · {active.entryIds.length} 词
+            {t('wordsUnit', { n: active.entryIds.length })}
           </span>
         </span>
         <Button variant="secondary" size="sm" onClick={endManualClass}>
-          结束课程
+          {t('endClass')}
         </Button>
       </div>
     );
@@ -45,12 +47,12 @@ export function SessionBar() {
         <input
           autoFocus
           className="text-sm border border-stone-300 rounded px-2 py-1 w-40"
-          placeholder="课程名，如: 商务汉语 3"
+          placeholder={t('classNamePlaceholder')}
           value={draftName}
           onChange={(e) => setDraftName(e.target.value)}
         />
         <Button type="submit" size="sm">
-          开始
+          {t('start')}
         </Button>
         <Button
           type="button"
@@ -61,7 +63,7 @@ export function SessionBar() {
             setDraftName('');
           }}
         >
-          取消
+          {t('cancel')}
         </Button>
       </form>
     );
@@ -69,7 +71,7 @@ export function SessionBar() {
 
   return (
     <Button variant="secondary" size="sm" onClick={() => setPrompting(true)}>
-      + 开始新课程
+      {t('startNewClass')}
     </Button>
   );
 }

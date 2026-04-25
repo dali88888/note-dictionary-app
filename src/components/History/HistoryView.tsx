@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useDictStore } from '../../store/dictStore';
 import type { ClassSession, DictionaryEntry, ExportOptions } from '../../types/dictionary';
+import { useT } from '../../i18n/useT';
+import type { StringKey } from '../../i18n';
 import { Button } from '../UI/Button';
 import { Toggle } from '../UI/Toggle';
 import { ChineseLine } from '../Common/ChineseLine';
@@ -18,9 +20,11 @@ export function HistoryView() {
   const entries = useDictStore((s) => s.entries);
   const sessions = useDictStore((s) => s.sessions);
   const showPinyin = useDictStore((s) => s.prefs.showPinyin);
+  const uiLanguage = useDictStore((s) => s.prefs.uiLanguage);
   const deleteEntry = useDictStore((s) => s.deleteEntry);
   const deleteSession = useDictStore((s) => s.deleteSession);
   const collectEntries = useDictStore((s) => s.collectEntries);
+  const { t } = useT();
 
   const [tab, setTab] = useState<Tab>('all');
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
@@ -67,7 +71,7 @@ export function HistoryView() {
     setExportError(null);
     try {
       const picked = sessions.filter((s) => selectedSessionIds.has(s.id));
-      await exportToPptx(picked, selectedEntries, exportOpts);
+      await exportToPptx(picked, selectedEntries, exportOpts, uiLanguage);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setExportError(msg);
@@ -76,20 +80,26 @@ export function HistoryView() {
     }
   };
 
+  const tabLabelKey: Record<Tab, StringKey> = {
+    all: 'tabAll',
+    date: 'tabByDate',
+    class: 'tabByClass',
+  };
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
       <div className="flex items-center gap-2 border-b border-stone-200 mb-4">
-        {(['all', 'date', 'class'] as Tab[]).map((t) => (
+        {(['all', 'date', 'class'] as Tab[]).map((tk) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
+            key={tk}
+            onClick={() => setTab(tk)}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
-              tab === t
+              tab === tk
                 ? 'border-amber-600 text-amber-700'
                 : 'border-transparent text-stone-500 hover:text-stone-700'
             }`}
           >
-            {t === 'all' ? '全部查询' : t === 'date' ? '按日期' : '按课程'}
+            {t(tabLabelKey[tk])}
           </button>
         ))}
       </div>
@@ -106,7 +116,7 @@ export function HistoryView() {
               selected={selectedSessionIds}
               onToggle={toggleSession}
               onDelete={(id) => deleteSession(id, false)}
-              emptyText="今天还没有自动归档的查询。"
+              emptyText={t('emptyByDate')}
             />
           )}
           {tab === 'class' && (
@@ -116,44 +126,46 @@ export function HistoryView() {
               selected={selectedSessionIds}
               onToggle={toggleSession}
               onDelete={(id) => deleteSession(id, false)}
-              emptyText='还没有手动创建的课程。在顶部点击"开始新课程"即可创建。'
+              emptyText={t('emptyByClass')}
             />
           )}
         </div>
 
         <aside className="bg-white border border-stone-200 rounded-xl p-4 h-fit md:sticky md:top-20">
-          <h3 className="text-sm font-semibold text-stone-700 mb-2">导出为 PPT</h3>
-          <p className="text-xs text-stone-500 mb-3">
-            在左侧"按日期"或"按课程"中勾选想导出的 session，然后点击下方按钮。
-          </p>
+          <h3 className="text-sm font-semibold text-stone-700 mb-2">
+            {t('exportPptTitle')}
+          </h3>
+          <p className="text-xs text-stone-500 mb-3">{t('exportHint')}</p>
 
           <div className="text-sm mb-3">
-            <div className="text-stone-600">已选 {selectedSessionIds.size} 组 session</div>
+            <div className="text-stone-600">
+              {t('selectedSessions', { n: selectedSessionIds.size })}
+            </div>
             <div className="text-stone-900 font-medium">
-              共 {selectedEntries.length} 个去重后的词条
+              {t('dedupedEntries', { n: selectedEntries.length })}
             </div>
           </div>
 
           <div className="space-y-2 mb-3 border-t border-stone-100 pt-3">
             <Toggle
-              label="例句含拼音"
+              label={t('includePinyin')}
               checked={exportOpts.includePinyin}
               onChange={(v) => setExportOpts({ ...exportOpts, includePinyin: v })}
             />
             <Toggle
-              label="例句含翻译"
+              label={t('includeExampleTranslation')}
               checked={exportOpts.includeExampleTranslation}
               onChange={(v) =>
                 setExportOpts({ ...exportOpts, includeExampleTranslation: v })
               }
             />
             <label className="block text-xs text-stone-500 mt-2">
-              PPT 标题（可选）
+              {t('pptTitleLabel')}
               <input
                 type="text"
                 value={exportOpts.title ?? ''}
                 onChange={(e) => setExportOpts({ ...exportOpts, title: e.target.value })}
-                placeholder="留空则用课程名"
+                placeholder={t('pptTitlePlaceholder')}
                 className="mt-1 w-full border border-stone-300 rounded px-2 py-1 text-sm text-stone-800"
               />
             </label>
@@ -165,12 +177,12 @@ export function HistoryView() {
             size="md"
             className="w-full"
           >
-            {exporting ? '生成中…' : '导出 .pptx'}
+            {exporting ? t('exporting') : t('exportBtn')}
           </Button>
 
           {exportError && (
             <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
-              {exportError}
+              {t('exportFailed', { msg: exportError })}
             </p>
           )}
 
@@ -179,7 +191,7 @@ export function HistoryView() {
               onClick={() => setSelectedSessionIds(new Set())}
               className="mt-3 text-xs text-stone-500 hover:text-stone-700 underline"
             >
-              清空选择
+              {t('clearSelection')}
             </button>
           )}
         </aside>
@@ -197,11 +209,10 @@ function AllEntriesList({
   onDelete: (id: string) => void;
   showPinyin: boolean;
 }) {
+  const { t } = useT();
   if (!entries.length) {
     return (
-      <p className="text-sm text-stone-400 italic pt-4">
-        还没有查询记录。去"查词"页输入一个中文词开始吧。
-      </p>
+      <p className="text-sm text-stone-400 italic pt-4">{t('emptyAll')}</p>
     );
   }
   return (
@@ -215,8 +226,11 @@ function AllEntriesList({
               size="md"
             />
             <div className="text-xs text-stone-500 mt-0.5">
-              {entry.language} · {formatDateTime(entry.queriedAt)} ·{' '}
-              {entry.meanings.length} 义项
+              {t('allEntriesSub', {
+                lang: entry.language,
+                time: formatDateTime(entry.queriedAt),
+                n: entry.meanings.length,
+              })}
             </div>
             <p className="text-sm text-stone-700 mt-1 truncate">
               {entry.meanings[0]?.definition}
@@ -226,7 +240,7 @@ function AllEntriesList({
             onClick={() => onDelete(entry.id)}
             className="text-stone-400 hover:text-red-600 text-xs px-2"
           >
-            删除
+            {t('delete')}
           </button>
         </li>
       ))}
@@ -249,6 +263,7 @@ function SessionGroupList({
   onDelete: (id: string) => void;
   emptyText: string;
 }) {
+  const { t } = useT();
   if (!sessions.length) {
     return <p className="text-sm text-stone-400 italic pt-4">{emptyText}</p>;
   }
@@ -277,27 +292,33 @@ function SessionGroupList({
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-semibold text-stone-800">{sess.name}</span>
                   <span className="text-xs text-stone-500">
-                    {sess.kind === 'auto' ? '自动归档' : '手动课程'}
+                    {sess.kind === 'auto' ? t('autoArchive') : t('manualClass')}
                   </span>
-                  <span className="text-xs text-stone-500">· {entries.length} 词</span>
+                  <span className="text-xs text-stone-500">
+                    {t('wordsUnit', { n: entries.length })}
+                  </span>
                   {sess.endedAt && (
-                    <span className="text-xs text-green-700">· 已结束</span>
+                    <span className="text-xs text-green-700">· {t('ended')}</span>
                   )}
                 </div>
                 <div className="text-xs text-stone-400 mt-0.5">
-                  开始 {formatDateTime(sess.createdAt)}
-                  {sess.endedAt ? ` · 结束 ${formatDateTime(sess.endedAt)}` : ''}
+                  {t('startedAt', { time: formatDateTime(sess.createdAt) })}
+                  {sess.endedAt
+                    ? t('endedAt', { time: formatDateTime(sess.endedAt) })
+                    : ''}
                 </div>
               </div>
               <button
                 onClick={() => {
-                  if (confirm(`删除 session "${sess.name}"？词条不会被删除。`)) {
+                  if (
+                    confirm(t('deleteSessionConfirm', { name: sess.name }))
+                  ) {
                     onDelete(sess.id);
                   }
                 }}
                 className="text-stone-400 hover:text-red-600 text-xs"
               >
-                删除
+                {t('delete')}
               </button>
             </div>
             {entries.length > 0 && (
@@ -312,7 +333,7 @@ function SessionGroupList({
                 ))}
                 {entries.length > 20 && (
                   <span className="text-xs text-stone-400 self-center">
-                    +{entries.length - 20} 更多
+                    {t('moreN', { n: entries.length - 20 })}
                   </span>
                 )}
               </div>

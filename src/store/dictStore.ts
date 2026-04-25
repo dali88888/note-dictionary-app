@@ -6,11 +6,14 @@ import type {
   ExportOptions,
 } from '../types/dictionary';
 import { translateWord } from '../api/translateClient';
+import type { UILang } from '../i18n';
 
 const DEFAULT_LANGUAGE = 'English';
+const DEFAULT_UI_LANG: UILang = 'zh';
 
 interface Prefs {
-  language: string;
+  language: string;      // translate target (e.g. "English", "日本語")
+  uiLanguage: UILang;    // UI chrome language (app titles/buttons)
   showPinyin: boolean;
 }
 
@@ -36,6 +39,7 @@ interface DictState {
   deleteSession: (sessionId: string, deleteEntries: boolean) => void;
 
   setLanguage: (language: string) => void;
+  setUILanguage: (lang: UILang) => void;
   setShowPinyin: (v: boolean) => void;
 
   /** called by export module to collect entries for a set of sessions */
@@ -79,7 +83,11 @@ export const useDictStore = create<DictState>()(
       entries: {},
       sessions: [],
       activeManualSessionId: null,
-      prefs: { language: DEFAULT_LANGUAGE, showPinyin: true },
+      prefs: {
+        language: DEFAULT_LANGUAGE,
+        uiLanguage: DEFAULT_UI_LANG,
+        showPinyin: true,
+      },
 
       latestEntryId: null,
       loading: false,
@@ -218,6 +226,9 @@ export const useDictStore = create<DictState>()(
       setLanguage: (language: string) => {
         set((s) => ({ prefs: { ...s.prefs, language } }));
       },
+      setUILanguage: (uiLanguage: UILang) => {
+        set((s) => ({ prefs: { ...s.prefs, uiLanguage } }));
+      },
       setShowPinyin: (v: boolean) => {
         set((s) => ({ prefs: { ...s.prefs, showPinyin: v } }));
       },
@@ -244,6 +255,15 @@ export const useDictStore = create<DictState>()(
         activeManualSessionId: s.activeManualSessionId,
         prefs: s.prefs,
       }),
+      // Ensure prefs from older persisted states pick up newly-added fields.
+      merge: (persistedState, currentState) => {
+        const p = persistedState as Partial<DictState> | undefined;
+        return {
+          ...currentState,
+          ...(p ?? {}),
+          prefs: { ...currentState.prefs, ...(p?.prefs ?? {}) },
+        };
+      },
     },
   ),
 );
