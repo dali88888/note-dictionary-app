@@ -7,11 +7,25 @@
 - 输入任意中文词 → 选定目标语言（8 种预设 + 任意自由输入）→ 返回分点的多义释义
 - 每个义项包含词性、释义、中文例句及例句翻译
 - 全局拼音开关：开启时拼音显示在每个汉字正上方
-- 查询自动按当天日期归档，并可手动开始/结束"课程"进一步分组
-- 一键导出为 `.pptx`，每词一张幻灯片
-- **多用户登录**：邮箱+密码 / Google / GitHub；每用户私有词库
+- **匿名即用**：进入网站即可立即查词，**无需登录**。注册是推荐项而非门槛
+- 查询自动按当天日期归档，并可手动开始/结束"课程"进一步分组（仅注册用户）
+- 一键导出为 `.pptx`，每词一张幻灯片（仅注册用户，需要历史记录）
+- **可选登录**：邮箱+密码 / Google / GitHub；注册后获得云端私有词库
 - **教师子账号**：教师角色可为不同学生建立子文件夹，分别管理各自的查词记录
-- 所有数据云端持久化（Supabase）+ 行级安全（RLS）隔离
+- 所有用户数据云端持久化（Supabase）+ 行级安全（RLS）隔离
+
+### 匿名 vs 注册用户
+
+| 能力 | 匿名访客 | 注册用户 |
+|---|---|---|
+| 查词翻译 | ✅ | ✅ |
+| 拼音开关 / 语言切换 | ✅ | ✅ |
+| 查询历史持久化 | ❌（仅当前查询） | ✅ |
+| 按日期/课程归档 | ❌ | ✅ |
+| 导出 PPT | ❌（无历史可导） | ✅ |
+| 教师管理学生 | — | ✅（teacher 角色） |
+
+匿名用户每次新查询会替换上一条结果（无 localStorage 持久化）。顶部"登录 / 注册"按钮以及搜索框上方的可关闭横幅都会引导用户注册——横幅一次关闭后通过 localStorage 记住选择，不会反复打扰回访用户。
 
 ## 技术栈
 
@@ -87,7 +101,7 @@ npm run preview  # 本地预览构建后的静态产物
    - `GEMINI_API_KEY` = 您的 Gemini key
    - `VITE_SUPABASE_URL` = 您的 Supabase Project URL
    - `VITE_SUPABASE_PUBLISHABLE_KEY` = 您的 Supabase anon key
-   - 服务端 `/api/translate` 还需要校验 JWT，默认会复用 `VITE_*` 形式的两个变量，无需重复添加；如需把客户端与服务端变量分开管理，再加 `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY`。
+   - 服务端 `/api/translate` 在请求**带** Bearer token 时会校验 JWT（默认复用 `VITE_*` 两个变量，无需重复添加；如需分开管理可再加 `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY`）。匿名请求不带 token，跳过校验直接放行——这是 v2 改为"注册可选"后的预期行为。
 4. **Settings → Domains → Add Domain** 输入 `note.neooccidental.com`。Vercel 会显示需要添加的 DNS 记录（一般是 CNAME → `cname.vercel-dns.com`）。
 5. 在您 `neooccidental.com` 的 DNS 服务商（如 Cloudflare）添加该 CNAME。
 6. 等待 DNS 生效（通常 1-10 分钟）+ HTTPS 证书自动签发。
@@ -163,39 +177,41 @@ https://<your-project-ref>.supabase.co/auth/v1/callback
 
 ```
 api/
-└── translate.ts              # Vercel Edge Function；先校验 Supabase JWT 再调 AI
+└── translate.ts              # Vercel Edge Function；JWT 可选（匿名也允许）；带 token 时严格校验
 supabase/
 └── schema.sql                # 表 + RLS + on_auth_user_created 触发器（在 SQL Editor 跑一次）
 src/
 ├── main.tsx
-├── App.tsx                   # AuthGate + 两视图 tab + 数据云端 hydration
+├── App.tsx                   # AuthGate + AuthModal + 两视图 tab + 数据云端 hydration
 ├── index.css                 # Tailwind + ruby-style hanzi clusters
 ├── types/dictionary.ts       # Syllable / Meaning / DictionaryEntry / ClassSession
 ├── auth/
 │   ├── supabaseClient.ts     # createClient + detectSessionInUrl
-│   ├── AuthContext.tsx       # 全局会话 / signIn / signUp / signInOAuth / signOut
+│   ├── AuthContext.tsx       # 全局会话 + 登录弹窗状态（openAuthModal / closeAuthModal）
 │   ├── passwordRules.ts      # 强密码校验
 │   └── types.ts              # Profile / UserRole
-├── store/dictStore.ts        # Zustand：云端 entries/sessions/managedStudents + 本地 prefs
-├── api/translateClient.ts    # fetch /api/translate 时附带 Bearer 令牌
+├── store/dictStore.ts        # Zustand：匿名走内存、注册走云端 entries/sessions/managedStudents
+├── api/translateClient.ts    # fetch /api/translate；有 session 时附带 Bearer，否则匿名调用
 ├── export/exportPptx.ts      # pptxgenjs 生成 .pptx（含 ruby 表格）
 └── components/
     ├── Auth/
-    │   ├── AuthGate.tsx              # 未登录 → 切登录/注册表单
+    │   ├── AuthGate.tsx              # 仅在 loading / config 缺失时阻塞；anon 与 authed 都直通
+    │   ├── AuthModal.tsx             # 浮层登录/注册弹窗（任意位置 openAuthModal 触发）
     │   ├── LoginForm.tsx
     │   ├── SignupForm.tsx            # 强密码 + 角色选择
+    │   ├── SignupPromptBanner.tsx    # 匿名访客的可关闭注册推荐横幅（搜索框上方）
     │   ├── OAuthButtons.tsx          # Google / GitHub 一键登录
     │   ├── PasswordStrengthIndicator.tsx
     │   └── LegacyImportDialog.tsx    # 旧 localStorage 数据一次性迁移到云端
     ├── Common/ChineseLine.tsx        # 拼音+汉字 ruby 渲染
     ├── Header/
-    │   ├── TopBar.tsx                # 拼音开关 / 语言 / 课程控制 / 学生切换 / 用户菜单
+    │   ├── TopBar.tsx                # 注册：拼音/语言/课程/学生切换/用户菜单；匿名：登录/注册按钮
     │   ├── UserMenu.tsx              # 当前账号 + 角色徽章 + 登出
     │   ├── StudentSwitcher.tsx       # 教师专用：当前是"自己"还是某子学生
     │   └── StudentManager.tsx        # 教师增删改子学生
-    ├── Search/{SearchBox,ResultCard,SearchView}.tsx
+    ├── Search/{SearchBox,ResultCard,SearchView}.tsx  # SearchView 顶部嵌入 SignupPromptBanner
     ├── Session/SessionBar.tsx        # 开始/结束手动课程
-    ├── History/HistoryView.tsx       # 全部/按日期/按课程 + 选择导出
+    ├── History/HistoryView.tsx       # 注册：全部/按日期/按课程 + 选择导出；匿名：引导注册的空状态
     └── UI/{Button,Toggle}.tsx
 ```
 
@@ -212,11 +228,12 @@ src/
 
 ## Roadmap
 
+- [ ] **服务端限流（重要，防匿名滥用）**：开放匿名后，per-user JWT 不再是滥用闸门。计划用 Vercel KV / Upstash 做 IP 级 rate-limit，或在前端加 Cloudflare Turnstile
+- [ ] 自动出题 / 错题本 / 间隔复习（注册功能扩展）
 - [ ] 导出为 Word / Markdown
 - [ ] 收藏夹（标记重点词）
 - [ ] 例句朗读（TTS）
 - [ ] 多 provider 时自动 fallback
-- [ ] 服务端限流（防滥用）
 - [ ] OAuth 首次登录时弹窗让用户选择 teacher / student（避免手动改库）
 - [ ] 个人资料编辑（昵称 / 角色 / 头像）
 - [ ] 学生子账号也能直接登录（v1 仅由教师代管）
