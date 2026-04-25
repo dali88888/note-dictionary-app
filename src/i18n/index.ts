@@ -146,6 +146,12 @@ const DICT = {
     authConfigMissingTitle: '认证服务未配置',
     authConfigMissingBody:
       '请在 .env.local 中填入 Supabase 凭据（URL + publishable key）后重新加载。',
+
+    /* Top-bar user menu */
+    signOutBtn: '退出登录',
+    roleBadgeStudent: '学生',
+    roleBadgeTeacher: '教师',
+    helloUser: (v: Vars) => `你好，${v.name}`,
   },
   en: {
     appTitle: 'Classroom Chinese Lookup',
@@ -289,6 +295,12 @@ const DICT = {
     authConfigMissingTitle: 'Auth not configured',
     authConfigMissingBody:
       'Set the Supabase URL + publishable key in .env.local and reload.',
+
+    /* Top-bar user menu */
+    signOutBtn: 'Sign out',
+    roleBadgeStudent: 'Student',
+    roleBadgeTeacher: 'Teacher',
+    helloUser: (v: Vars) => `Hi, ${v.name}`,
   },
 } as const satisfies Record<UILang, Record<string, string | ((v: Vars) => string)>>;
 

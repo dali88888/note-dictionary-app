@@ -3,6 +3,7 @@ import { UI_LANGS, UI_LANG_LABEL, type UILang } from '../../i18n';
 import { useT } from '../../i18n/useT';
 import { Toggle } from '../UI/Toggle';
 import { SessionBar } from '../Session/SessionBar';
+import { UserMenu } from './UserMenu';
 
 type View = 'search' | 'history';
 
@@ -74,6 +75,8 @@ export function TopBar({ view, onChangeView }: Props) {
 
           <div className="h-5 w-px bg-stone-300" />
           <SessionBar />
+          <div className="h-5 w-px bg-stone-300" />
+          <UserMenu />
         </div>
       </div>
     </header>
