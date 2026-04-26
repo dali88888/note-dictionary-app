@@ -46,17 +46,35 @@ interface ApiResponse {
 
 const FORWARD_PROMPT = (word: string, language: string) => `你是一位专业的中文词典编辑，为非母语学习者编写词条。
 
-对中文词"${word}"提供详细解释，翻译目标语言为 ${language}。
+输入内容：
+"""
+${word}
+"""
+翻译目标语言为 ${language}。
 
-严格要求：
+第一步 · 判断输入类型：
+- 如果是 SINGLE WORD / PHRASE（单字、词、固定短语，如"好"、"打"、"一带一路"），按"词条模式"输出。
+- 如果是 FULL SENTENCE / CLAUSE（完整句子或带标点的整段文字，如"今天天气真好。"或多个句子拼接），按"整句翻译模式"输出。
+
+【词条模式】严格要求：
 1. 列出所有常用含义与词性，每个单独作为一个 meaning 对象。
 2. 如果是多音字或多音词，在每个 meaning 中填写 pinyin 字段表示该义项的读音。
 3. 每个 meaning 提供一个自然、地道的中文例句。
 4. 例句拆分为 Syllable 数组：每个汉字一个对象 { hanzi, pinyin }；标点符号也占一个位置，但 pinyin 填空字符串 ""。
-5. wordSyllables 同样是 Syllable 数组，表示该词的主拼音读法（多音字取最常用）。
+5. wordSyllables 是 Syllable 数组，表示该词的主拼音读法（多音字取最常用）。
 6. partOfSpeech、definition、example.translation 全部使用 ${language} 书写。
 7. pinyin 使用带声调的带调标字母（例如 "hǎo"、"zhōng"、"cháng"），不要使用数字声调。
-8. 只返回 JSON，严格符合提供的 schema，不要添加任何其他文字。`;
+
+【整句翻译模式】严格要求：
+1. 只输出**一个** meaning 对象，不要列多个。
+2. partOfSpeech 字段填写 "sentence"（保持英文小写，目标语言为非英文时也写 "sentence"，前端用它来识别整句模式）。
+3. definition 字段填写整段输入的最佳地道翻译，使用 ${language} 书写。
+4. **不要**生成例句——把 example 设为：{ "chinese": [], "translation": "" }（空数组、空字符串）。
+5. wordSyllables 仍然按字给出原中文输入的拼音（用于在结果页顶部展示原句加拼音）。标点 pinyin 填 ""。
+6. pinyin 使用带声调字母。
+
+通用：
+- 只返回 JSON，严格符合提供的 schema，不要添加任何其他文字。`;
 
 const REVERSE_PROMPT = (word: string) => `You are an expert Chinese language teacher who helps non-native learners find idiomatic Chinese expressions. The learner can input a word, phrase, or full sentence in ANY language (or even a mix of multiple languages, e.g. English + Japanese, or English with some Chinese inserted).
 
@@ -69,15 +87,17 @@ Tasks:
 1. Auto-detect the source language(s). Set the "language" field to the language name (e.g. "English", "Français", "日本語"). If the input is mixed, write something like "Mixed: English + Japanese". Use the language's own native name when possible.
 2. Decide whether the input is a SINGLE WORD/PHRASE or a FULL SENTENCE:
    - WORD/PHRASE → produce 2-5 distinct Chinese candidate translations as separate meaning objects, ordered from most common/neutral to more marked. The whole point is to help the learner pick the right one for the situation.
-   - FULL SENTENCE → produce exactly ONE meaning containing the single best idiomatic Chinese rendering.
+   - FULL SENTENCE → produce exactly ONE meaning containing the single best idiomatic Chinese rendering, AND skip the example (see field rules below).
 3. For each meaning fill these fields:
-   - partOfSpeech: written in the SOURCE LANGUAGE (e.g. "adjective", "verb", "expression", "形容詞")
+   - partOfSpeech: written in the SOURCE LANGUAGE (e.g. "adjective", "verb", "expression", "形容詞"). For FULL SENTENCE inputs, set this to the literal string "sentence" (lowercase, English) so the frontend can detect sentence-translation mode.
    - register: REQUIRED, one of "casual" (slangy/informal), "colloquial" (everyday spoken), "neutral" (works anywhere), "formal" (official/business), "literary" (written/poetic/classical-flavored)
    - hanziSyllables: the Chinese candidate broken per-character. Each entry { hanzi, pinyin }. Punctuation marks each occupy one entry with pinyin: "".
-   - definition: 1-2 sentences IN THE SOURCE LANGUAGE explaining the nuance — when to use this candidate, what register/situation it fits, and how it differs from the other candidates. Be concrete; mention spoken vs written, formality, emotional tone, regional usage when relevant.
-   - example: { chinese, translation }
-       chinese: a natural, idiomatic Chinese sentence USING THIS CANDIDATE, broken per-character with pinyin.
-       translation: that sentence's equivalent in the SOURCE LANGUAGE.
+   - definition: 1-2 sentences IN THE SOURCE LANGUAGE explaining the nuance — when to use this candidate, what register/situation it fits, and how it differs from the other candidates. Be concrete; mention spoken vs written, formality, emotional tone, regional usage when relevant. For FULL SENTENCE inputs, this field is optional usage notes (you may leave it as a 1-sentence remark or empty).
+   - example:
+       For WORD/PHRASE inputs: { chinese, translation }
+         chinese: a natural, idiomatic Chinese sentence USING THIS CANDIDATE, broken per-character with pinyin.
+         translation: that sentence's equivalent in the SOURCE LANGUAGE.
+       For FULL SENTENCE inputs: set example to { "chinese": [], "translation": "" } — empty arrays/strings, no example needed because the candidate IS the translation already.
 4. Top-level fields:
    - word: echo the learner's original input verbatim.
    - wordSyllables: ALWAYS return an empty array [] (the learner did not input Chinese — there's nothing to syllabify on the input side).
@@ -396,8 +416,11 @@ export default async function handler(req: Request): Promise<Response> {
   if (!word) {
     return json({ error: '缺少 word 参数' }, 400);
   }
-  // Reverse mode allows longer input (full sentences in any language) — be more lenient.
-  const maxLen = direction === 'other-to-zh' ? 200 : 40;
+  // Both directions support full-sentence input now.  Cap at 300 chars so
+  // a typical sentence/paragraph fits but a runaway paste-bomb doesn't
+  // gobble Gemini quota.  Edge function runtime limits and AI latency are
+  // the real ceilings, not character count.
+  const maxLen = 300;
   if (word.length > maxLen) {
     return json({ error: `单次查询长度不能超过 ${maxLen} 个字符` }, 400);
   }

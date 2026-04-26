@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useDictStore } from '../../store/dictStore';
 import { PRESET_LANGUAGES, type TranslationDirection } from '../../types/dictionary';
 import { useT } from '../../i18n/useT';
@@ -15,14 +15,40 @@ export function SearchBox() {
   const [customOpen, setCustomOpen] = useState(false);
   const [customDraft, setCustomDraft] = useState('');
   const [direction, setDirection] = useState<TranslationDirection>('zh-to-other');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isPreset = (PRESET_LANGUAGES as readonly string[]).includes(language);
+
+  // Auto-resize the textarea: shrink to 'auto' first so scrollHeight
+  // recomputes correctly when the user deletes characters, then grow
+  // to fit the content.  Capped via `max-h-*` on the element so very
+  // long input scrolls instead of pushing the layout around.
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, [word]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = word.trim();
     if (!trimmed || loading) return;
     query(trimmed, direction);
+  };
+
+  // Submit on Enter, allow Shift+Enter for a newline.  Critically, also
+  // ignore Enter while an IME composition is in progress — Chinese
+  // pinyin input uses Enter to confirm a candidate character, and we
+  // don't want that to fire a query mid-word.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter') return;
+    if (e.shiftKey) return;
+    // `isComposing` is the standard signal; some browsers expose it on
+    // the synthetic event, others only on the native event.
+    if (e.nativeEvent.isComposing || (e as unknown as { isComposing?: boolean }).isComposing) return;
+    e.preventDefault();
+    handleSubmit(e);
   };
 
   const handleLangChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -66,33 +92,45 @@ export function SearchBox() {
           </button>
         </div>
 
-        <div className="flex items-stretch gap-2 flex-wrap sm:flex-nowrap">
-          <input
-            type="text"
+        <div className="flex items-start gap-2 flex-wrap sm:flex-nowrap">
+          <textarea
+            ref={textareaRef}
+            rows={1}
             value={word}
             onChange={(e) => setWord(e.target.value)}
+            onKeyDown={handleKeyDown}
             placeholder={t(isReverse ? 'reverseSearchPlaceholder' : 'searchPlaceholder')}
             disabled={loading}
-            className="flex-1 min-w-0 text-lg px-4 py-3 border border-stone-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent disabled:bg-stone-50"
+            className="flex-1 min-w-0 text-lg px-4 py-3 border border-stone-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent disabled:bg-stone-50 resize-none overflow-y-auto leading-relaxed max-h-[16rem]"
             autoFocus
           />
-          <Button type="submit" size="lg" disabled={loading || !word.trim()}>
+          {/* The Submit button + language dropdown are top-aligned with
+              the textarea so they stay visually anchored as the textarea
+              grows.  `self-start` keeps them at the first line. */}
+          <Button
+            type="submit"
+            size="lg"
+            disabled={loading || !word.trim()}
+            className="self-start"
+          >
             {loading ? t('searchLoading') : t('searchBtn')}
           </Button>
 
           {isReverse ? (
             // Reverse mode: show static "→ Chinese" indicator (target is always Chinese)
-            <div className="flex items-center px-3 border border-stone-300 rounded-lg bg-stone-50 text-sm text-stone-600 whitespace-nowrap">
+            <div className="self-start flex items-center px-3 py-2 border border-stone-300 rounded-lg bg-stone-50 text-sm text-stone-600 whitespace-nowrap">
               {t('targetIsChinese')}
             </div>
           ) : (
-            // Forward mode: target-language picker (right of Search button)
-            <div className="flex items-center gap-1.5 px-3 border border-stone-300 rounded-lg bg-white">
+            // Forward mode: target-language picker (right of Search button).
+            // self-start keeps it pinned to the first textarea line as the
+            // textarea grows for multi-line input.
+            <div className="self-start flex items-center gap-1.5 px-3 py-2 border border-stone-300 rounded-lg bg-white">
               <span className="text-sm text-stone-500 whitespace-nowrap">
                 {t('translateTo')}
               </span>
               <select
-                className="text-sm bg-transparent py-1 focus:outline-none"
+                className="text-sm bg-transparent focus:outline-none"
                 value={isPreset ? language : '__other__'}
                 onChange={handleLangChange}
               >

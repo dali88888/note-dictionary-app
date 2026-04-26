@@ -40,11 +40,11 @@ const DICT = {
     classNamePlaceholder: '课程名，如: 商务汉语 3',
     start: '开始',
 
-    searchPlaceholder: '输入中文词，如：长、打、一带一路',
-    reverseSearchPlaceholder: '输入任意语言（如 happy / je suis fatigué / ありがとう / "I want 一杯 coffee"）',
+    searchPlaceholder: '输入中文词或整句，如：长 / 一带一路 / 我想去中国旅行。',
+    reverseSearchPlaceholder: '输入任意语言的词或整句，如 happy / je suis fatigué / "I want to travel to China"',
     searchBtn: '查询',
     searchLoading: '查询中…',
-    searchHint: '回车查询 · 查询记录自动保存',
+    searchHint: '回车查询 · Shift + 回车换行 · 输入整句时只翻译，不再给例句',
 
     /* Direction toggle */
     dirZhToOther: '中文 → 外语',
@@ -59,6 +59,7 @@ const DICT = {
     emptyHintReverse: '在上方输入任意语言的词或句子，系统会给出地道的中文表达。',
 
     translatedToLine: (v: Vars) => `翻译至 ${v.lang} · ${v.n} 个义项`,
+    sentenceTranslatedTo: (v: Vars) => `整句翻译 · ${v.lang}`,
     chineseCandidatesLine: (v: Vars) => `从 ${v.lang} 译为中文 · ${v.n} 个候选词`,
     chineseCandidatesLineSingle: (v: Vars) => `从 ${v.lang} 译为中文`,
     usageNote: '用法说明',
@@ -235,12 +236,12 @@ const DICT = {
     classNamePlaceholder: 'Class name, e.g. Business Chinese 3',
     start: 'Start',
 
-    searchPlaceholder: 'Enter a Chinese word (e.g. 长, 打, 一带一路)',
+    searchPlaceholder: 'Enter a Chinese word or sentence (e.g. 长 / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
-      'Enter any language (e.g. happy / je suis fatigué / ありがとう / "I want 一杯 coffee")',
+      'Enter a word or sentence in any language (e.g. happy / je suis fatigué / "I want to travel to China")',
     searchBtn: 'Search',
     searchLoading: 'Searching…',
-    searchHint: 'Press Enter to search · auto-saved to history',
+    searchHint: 'Enter to search · Shift+Enter for newline · sentences get a translation only, no example',
 
     /* Direction toggle */
     dirZhToOther: 'Chinese → Other',
@@ -258,6 +259,7 @@ const DICT = {
 
     translatedToLine: (v: Vars) =>
       `Translated to ${v.lang} · ${v.n} meaning${Number(v.n) === 1 ? '' : 's'}`,
+    sentenceTranslatedTo: (v: Vars) => `Sentence translation · ${v.lang}`,
     chineseCandidatesLine: (v: Vars) =>
       `${v.lang} → Chinese · ${v.n} candidate${Number(v.n) === 1 ? '' : 's'}`,
     chineseCandidatesLineSingle: (v: Vars) => `${v.lang} → Chinese`,

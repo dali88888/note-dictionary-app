@@ -33,6 +33,7 @@ export function ResultCard({ entry, onClose }: Props) {
   const { t } = useT();
 
   const isReverse = entry.direction === 'other-to-zh';
+  const sentenceMode = isSentenceMode(entry);
 
   return (
     <div className="fade-in bg-white rounded-xl shadow-sm border border-stone-200 p-6 relative">
@@ -57,9 +58,19 @@ export function ResultCard({ entry, onClose }: Props) {
         {entry.meanings.map((m, idx) => (
           <li key={idx} className="border-l-4 border-amber-300 pl-4">
             {isReverse ? (
-              <ReverseMeaningBody m={m} idx={idx} showPinyin={showPinyin} />
+              <ReverseMeaningBody
+                m={m}
+                idx={idx}
+                showPinyin={showPinyin}
+                sentenceMode={sentenceMode}
+              />
             ) : (
-              <ForwardMeaningBody m={m} idx={idx} showPinyin={showPinyin} />
+              <ForwardMeaningBody
+                m={m}
+                idx={idx}
+                showPinyin={showPinyin}
+                sentenceMode={sentenceMode}
+              />
             )}
           </li>
         ))}
@@ -70,6 +81,19 @@ export function ResultCard({ entry, onClose }: Props) {
 
 /* ─── Forward (zh → other) ──────────────────────────────────── */
 
+/**
+ * "Sentence-translation mode": the AI was given a full sentence rather
+ * than a word, so it returned exactly one meaning with no example
+ * (example.chinese: []).  Used to swap copy + drop the meaning numbering
+ * + skip the example block.  See FORWARD_PROMPT in api/translate.ts.
+ */
+function isSentenceMode(entry: DictionaryEntry): boolean {
+  return (
+    entry.meanings.length === 1 &&
+    (entry.meanings[0]?.example?.chinese?.length ?? 0) === 0
+  );
+}
+
 function ForwardHeader({
   entry,
   showPinyin,
@@ -78,11 +102,14 @@ function ForwardHeader({
   showPinyin: boolean;
 }) {
   const { t } = useT();
+  const sentence = isSentenceMode(entry);
   return (
     <div className="mb-5">
       <ChineseLine syllables={entry.wordSyllables} showPinyin={showPinyin} size="xl" />
       <div className="mt-2 text-sm text-stone-500">
-        {t('translatedToLine', { lang: entry.language, n: entry.meanings.length })}
+        {sentence
+          ? t('sentenceTranslatedTo', { lang: entry.language })
+          : t('translatedToLine', { lang: entry.language, n: entry.meanings.length })}
       </div>
     </div>
   );
@@ -92,21 +119,32 @@ function ForwardMeaningBody({
   m,
   idx,
   showPinyin,
+  sentenceMode,
 }: {
   m: Meaning;
   idx: number;
   showPinyin: boolean;
+  sentenceMode: boolean;
 }) {
   const { t } = useT();
+  const hasExample = (m.example?.chinese?.length ?? 0) > 0;
   return (
     <>
       <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="text-amber-700 font-bold text-lg">
-          {CIRCLED[idx] ?? `${idx + 1}.`}
-        </span>
-        <span className="inline-block text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded font-medium uppercase tracking-wide">
-          {m.partOfSpeech}
-        </span>
+        {/* In sentence mode there's only one "meaning" and it IS the
+            translation — numbering it ① feels off.  Skip the badge. */}
+        {!sentenceMode && (
+          <span className="text-amber-700 font-bold text-lg">
+            {CIRCLED[idx] ?? `${idx + 1}.`}
+          </span>
+        )}
+        {/* Hide the partOfSpeech tag for sentences — the AI sets it to
+            "sentence" purely as a mode signal, not as user-facing info. */}
+        {!sentenceMode && m.partOfSpeech && (
+          <span className="inline-block text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded font-medium uppercase tracking-wide">
+            {m.partOfSpeech}
+          </span>
+        )}
         {m.pinyin && (
           <span className="text-sm italic text-amber-700">
             {t('pronunciation')}
@@ -118,17 +156,19 @@ function ForwardMeaningBody({
         {m.definition}
       </p>
 
-      <div className="mt-2 pl-2 border-l border-stone-200">
-        <div className="text-xs text-stone-500 mb-1">{t('example')}</div>
-        <ChineseLine
-          syllables={m.example.chinese}
-          showPinyin={showPinyin}
-          size="md"
-        />
-        <p className="mt-1 text-sm italic text-stone-600">
-          {m.example.translation}
-        </p>
-      </div>
+      {hasExample && (
+        <div className="mt-2 pl-2 border-l border-stone-200">
+          <div className="text-xs text-stone-500 mb-1">{t('example')}</div>
+          <ChineseLine
+            syllables={m.example.chinese}
+            showPinyin={showPinyin}
+            size="md"
+          />
+          <p className="mt-1 text-sm italic text-stone-600">
+            {m.example.translation}
+          </p>
+        </div>
+      )}
     </>
   );
 }
@@ -156,21 +196,28 @@ function ReverseMeaningBody({
   m,
   idx,
   showPinyin,
+  sentenceMode,
 }: {
   m: Meaning;
   idx: number;
   showPinyin: boolean;
+  sentenceMode: boolean;
 }) {
   const { t } = useT();
   const reg = m.register;
   const regKey = reg ? REGISTER_KEY[reg] : null;
   const regColor = reg ? REGISTER_COLOR[reg] : '';
+  const hasExample = (m.example?.chinese?.length ?? 0) > 0;
+  const hasDefinition = !!m.definition && m.definition.trim().length > 0;
   return (
     <>
       <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="text-amber-700 font-bold text-lg">
-          {CIRCLED[idx] ?? `${idx + 1}.`}
-        </span>
+        {/* Skip the ① numbering for sentence mode (only one item) */}
+        {!sentenceMode && (
+          <span className="text-amber-700 font-bold text-lg">
+            {CIRCLED[idx] ?? `${idx + 1}.`}
+          </span>
+        )}
         {/* Chinese candidate — large with ruby pinyin */}
         {m.hanziSyllables && m.hanziSyllables.length > 0 && (
           <ChineseLine
@@ -186,29 +233,42 @@ function ReverseMeaningBody({
             {t(regKey)}
           </span>
         )}
-        <span className="inline-block text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded font-medium tracking-wide">
-          {m.partOfSpeech}
-        </span>
+        {/* Hide the partOfSpeech tag for sentences — it's set to
+            "sentence" purely as a mode signal, not user-facing info. */}
+        {!sentenceMode && m.partOfSpeech && (
+          <span className="inline-block text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded font-medium tracking-wide">
+            {m.partOfSpeech}
+          </span>
+        )}
       </div>
 
-      {/* Usage note */}
-      <div className="mt-2">
-        <div className="text-xs text-stone-500 mb-0.5">{t('usageNote')}</div>
-        <p className="text-stone-800 text-sm leading-relaxed">{m.definition}</p>
-      </div>
+      {/* Usage note — for word/phrase mode this is the "when to use which
+          candidate" guidance.  For sentence mode it's optional commentary;
+          skip the heading + box if the AI didn't fill it in. */}
+      {hasDefinition && (
+        <div className="mt-2">
+          {!sentenceMode && (
+            <div className="text-xs text-stone-500 mb-0.5">{t('usageNote')}</div>
+          )}
+          <p className="text-stone-800 text-sm leading-relaxed">{m.definition}</p>
+        </div>
+      )}
 
-      {/* Example: Chinese sentence + source-language translation */}
-      <div className="mt-3 pl-2 border-l border-stone-200">
-        <div className="text-xs text-stone-500 mb-1">{t('example')}</div>
-        <ChineseLine
-          syllables={m.example.chinese}
-          showPinyin={showPinyin}
-          size="md"
-        />
-        <p className="mt-1 text-sm italic text-stone-600">
-          {m.example.translation}
-        </p>
-      </div>
+      {/* Example: Chinese sentence + source-language translation.
+          Skipped entirely for full-sentence input — see REVERSE_PROMPT. */}
+      {hasExample && (
+        <div className="mt-3 pl-2 border-l border-stone-200">
+          <div className="text-xs text-stone-500 mb-1">{t('example')}</div>
+          <ChineseLine
+            syllables={m.example.chinese}
+            showPinyin={showPinyin}
+            size="md"
+          />
+          <p className="mt-1 text-sm italic text-stone-600">
+            {m.example.translation}
+          </p>
+        </div>
+      )}
     </>
   );
 }
