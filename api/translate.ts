@@ -186,6 +186,15 @@ async function callGemini(
       responseMimeType: 'application/json',
       responseSchema: schema,
       temperature: 0.3,
+      // Disable Gemini 2.5's "thinking" mode.  By default, gemini-2.5-flash
+      // burns 5–15 s of latency on internal reasoning tokens before it
+      // streams output — useful for math/code, useless for dictionary
+      // lookups whose output is constrained by a JSON schema and whose
+      // "reasoning" is just pattern recall.  Setting thinkingBudget=0
+      // brings typical response time down from ~14 s to ~2 s without
+      // any observable quality loss for our prompts.
+      // Docs: https://ai.google.dev/gemini-api/docs/thinking
+      thinkingConfig: { thinkingBudget: 0 },
     },
   };
 
