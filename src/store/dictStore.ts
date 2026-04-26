@@ -120,9 +120,20 @@ function dateKey(ts: number): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+/**
+ * Resolve the currently signed-in user id, or null for anonymous.
+ *
+ * IMPORTANT: uses `getSession()` (instant localStorage read), NOT
+ * `getUser()` (network request that throws AuthSessionMissingError
+ * for anon users).  For an anonymous user, `getUser()`'s thrown
+ * rejection used to bubble out of `query()` before the loading flag
+ * was even set — the user clicked Search and saw absolutely nothing
+ * happen.  `getSession()` returns `{ session: null }` cleanly for
+ * anon and never throws.
+ */
 async function getCurrentUserId(): Promise<string | null> {
-  const { data } = await supabase.auth.getUser();
-  return data.user?.id ?? null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user.id ?? null;
 }
 
 /**
@@ -604,9 +615,14 @@ export const useDictStore = create<DictState>()(
       query: async (rawWord, direction = 'zh-to-other') => {
         const word = rawWord.trim();
         if (!word) return;
-        const userId = await getCurrentUserId();
+        // Flip the spinner ON synchronously (before any await) so the
+        // SearchBox button immediately reflects the click.  Anything
+        // that throws below — auth lookup, network fetch, DB insert —
+        // is now safely inside the try, so loading always gets cleared
+        // in the catch.
         set({ loading: true, error: null });
         try {
+          const userId = await getCurrentUserId();
           const { prefs, currentManagedStudentId, sessions, entries, activeManualSessionId } =
             get();
           const data = await translateWord(word, prefs.language, direction);
