@@ -113,19 +113,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     let cancelled = false;
 
-    supabase.auth.getSession().then(async ({ data }) => {
+    // Hard timeout: if getSession() never resolves (rare, but seen in
+    // some networks where Supabase's storage endpoint is throttled),
+    // fall back to anon after 5 s so the app actually renders instead
+    // of the user staring at a faint loading spinner forever.
+    const timeoutId = setTimeout(() => {
       if (cancelled) return;
-      const sess = data.session;
-      setSession(sess);
-      if (sess) {
-        const p = await fetchProfile(sess.user.id);
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[auth] getSession() did not resolve within 5s — falling back to anon. ' +
+          'Subsequent auth state changes will still flip to authed if a session arrives.',
+      );
+      setStatus((prev) => (prev === 'loading' ? 'anon' : prev));
+    }, 5000);
+
+    supabase.auth
+      .getSession()
+      .then(async ({ data }) => {
         if (cancelled) return;
-        setProfile(p);
-        setStatus('authed');
-      } else {
+        clearTimeout(timeoutId);
+        const sess = data.session;
+        setSession(sess);
+        if (sess) {
+          const p = await fetchProfile(sess.user.id);
+          if (cancelled) return;
+          setProfile(p);
+          setStatus('authed');
+        } else {
+          setStatus('anon');
+        }
+      })
+      .catch((e) => {
+        // If getSession itself rejects (corrupted localStorage,
+        // crypto API unavailable, etc), don't leave the app stuck —
+        // log loudly and fall through to anon mode.
+        if (cancelled) return;
+        clearTimeout(timeoutId);
+        // eslint-disable-next-line no-console
+        console.error('[auth] getSession failed; falling back to anon:', e);
         setStatus('anon');
-      }
-    });
+      });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, sess) => {
       setSession(sess);
@@ -141,6 +168,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      clearTimeout(timeoutId);
       sub.subscription.unsubscribe();
     };
   }, []);

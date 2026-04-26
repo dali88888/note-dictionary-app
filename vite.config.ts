@@ -61,6 +61,18 @@ function apiEdgeDevPlugin(): Plugin {
   };
 }
 
+// Stamp the build with a short identifier so the running bundle can
+// log "[note-dict] booting · build <id>" — invaluable for confirming
+// which deploy a user is actually loading when something looks wrong.
+// Prefer Vercel's git SHA when available, fall back to ISO timestamp.
+const BUILD_ID = (
+  process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ??
+  new Date().toISOString().replace(/[:.]/g, '-')
+);
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), apiEdgeDevPlugin()],
+  define: {
+    __APP_VERSION__: JSON.stringify(BUILD_ID),
+  },
 });

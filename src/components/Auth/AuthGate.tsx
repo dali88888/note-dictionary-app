@@ -42,9 +42,16 @@ VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...`}
   }
 
   if (status === 'loading') {
+    // Visible spinner + label so the user can tell "the app is alive
+    // but waiting on Supabase" apart from "the page is blank because
+    // something crashed".  Previously this was a single faint `…`
+    // that easily read as a totally white screen.
     return (
       <div className="min-h-screen flex items-center justify-center bg-stone-50">
-        <div className="text-stone-400 text-sm">…</div>
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+          <div className="text-stone-500 text-sm">{t('appTitle')}</div>
+        </div>
       </div>
     );
   }
