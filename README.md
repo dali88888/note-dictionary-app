@@ -105,16 +105,73 @@ npm run preview  # 本地预览构建后的静态产物
 4. **Settings → Domains → Add Domain** 输入 `note.neooccidental.com`。Vercel 会显示需要添加的 DNS 记录（一般是 CNAME → `cname.vercel-dns.com`）。
 5. 在您 `neooccidental.com` 的 DNS 服务商（如 Cloudflare）添加该 CNAME。
 6. 等待 DNS 生效（通常 1-10 分钟）+ HTTPS 证书自动签发。
-7. **回到 Supabase**：**Authentication → URL Configuration**，把 `Site URL` 设为 `https://note.neooccidental.com`，并在 `Redirect URLs` 里追加：
+7. ⚠️ **回到 Supabase（极其关键，否则邮件确认链接会指向 localhost）**：**Authentication → URL Configuration**：
+   - `Site URL` 设为 `https://note.neooccidental.com`（**不要保留默认的 `http://localhost:3000`**）
+   - `Redirect URLs` 里追加（点 Add URL 一次加一条）：
+     ```
+     https://note.neooccidental.com
+     https://note.neooccidental.com/**
+     http://localhost:5173
+     http://localhost:5173/**
+     ```
+   - 点 **Save**
+
+   **这一步如果跳过，会出现以下任一症状（详见下方 [邮件确认问题排查](#邮件确认问题排查)）：**
+   - 邮件中的确认链接指向 `localhost:3000` 或 `localhost:5173` → 用户点击后浏览器报"无法访问"
+   - 前端显式传的 `emailRedirectTo` 被 Supabase 静默忽略（必须在白名单里才会生效）
+   - OAuth 登录回跳被拒绝
+
+之后每次 `git push` 到 main 分支都会自动重新部署。
+
+## 邮件确认问题排查
+
+注册流程依赖 Supabase 的邮件服务，发邮件链路里有几个常见坑——**90% 的"收不到邮件"或"邮件链接打不开"问题都来自 Supabase Dashboard 配置，不是代码 bug**。按以下顺序检查：
+
+### 症状 A：收到邮件，点确认链接显示"localhost 拒绝了我们的连接请求"
+
+**根因**：Supabase 邮件模板里的 `{{ .ConfirmationURL }}` 用的是 **Site URL**。如果 Site URL 还是默认的 `http://localhost:3000` / `http://localhost:5173`，邮件链接就会指向 localhost。
+
+虽然前端 `signUp` 时传了 `emailRedirectTo: window.location.origin`，但**这个参数只有在 URL 已经写进 Redirect URLs 白名单时才会生效**——否则 Supabase 静默忽略它，fallback 到 Site URL。
+
+**修复**：去 Supabase Dashboard → **Authentication → URL Configuration**：
+1. `Site URL` 改为 `https://note.neooccidental.com`
+2. `Redirect URLs` 白名单里至少要有：
    ```
    https://note.neooccidental.com
    https://note.neooccidental.com/**
-   http://localhost:5173        # 本地开发用
+   http://localhost:5173
    http://localhost:5173/**
    ```
-   不加这一步的话，OAuth/邮箱确认链接回跳时会被 Supabase 拒绝。
+3. **Save**，再重新触发一次注册（用一个新邮箱），新邮件里的链接就会指向正确域名。
 
-之后每次 `git push` 到 main 分支都会自动重新部署。
+### 症状 B：网站点了"注册"，但完全没收到邮件
+
+按可能性从高到低排查：
+
+1. **同邮箱重复注册（最常见）**：Supabase v2 出于反爆破考虑，对**已经在 `auth.users` 表里、还未确认**的邮箱再次调 `signUp` 时会**静默不发邮件**——返回值看起来"成功"但实际不会再发。
+   - **代码已处理**：v2.x 的 SignupForm 现在会检测 `data.user.identities.length === 0`，识别为"该邮箱已注册过"并显示"重发邮件"按钮 + "直接登录"链接。
+   - **手动确认**：去 Supabase Dashboard → **Authentication → Users**，看看你测试的邮箱是不是已经在列表里且 `Email Confirmed At` 为空。如果是，要么用新邮箱测试，要么在注册成功页点"重发确认邮件"。
+
+2. **小时级 SMTP 限额**：Supabase 默认内置 SMTP **每邮箱每小时最多 1 封**、整个项目每小时上限有限。短时间内反复测试容易触顶。
+   - **临时绕过**：换不同邮箱测试，或等 1 小时再试。
+   - **长期方案**：Supabase Dashboard → **Project Settings → Auth → SMTP Settings**，配置自家 SMTP（如 SendGrid、Resend、Postmark），限额由 SMTP 提供商决定。
+
+3. **进了垃圾邮件**：Supabase 默认 SMTP 的发件域是 `noreply@mail.app.supabase.io`，部分邮箱（尤其是企业邮箱、QQ 邮箱）会直接判定为垃圾邮件。
+   - 检查垃圾邮件文件夹。
+   - 同样建议长期方案改成自家 SMTP，发件人显示自己的域名信任度更高。
+
+4. **Email Provider 被关闭**：Supabase Dashboard → **Authentication → Providers → Email** 必须开着开关。
+
+5. **`emailRedirectTo` 不在白名单里**：症状 A 的同源问题——白名单缺失时 Supabase 不再静默 fallback、而是直接拒绝发送。修复同症状 A。
+
+### 验证修复是否生效
+
+1. 用一个**全新**的邮箱（之前没注册过的）走一次注册流程。
+2. 在 Supabase Dashboard → **Logs Explorer → Auth Logs** 过滤 `signup`，应该能看到一条成功记录。
+3. 收件箱里应该收到一封 `Confirm your signup` 邮件。
+4. 链接形如 `https://<your-project-ref>.supabase.co/auth/v1/verify?token=...&redirect_to=https%3A%2F%2Fnote.neooccidental.com%2F`。点击应回到 note.neooccidental.com 并自动登录。
+
+如果以上都正确但仍有问题，去 Supabase **Logs Explorer** 查 `auth.audit_log_entries` 看具体错误。
 
 ## OAuth 配置（Google / GitHub）
 

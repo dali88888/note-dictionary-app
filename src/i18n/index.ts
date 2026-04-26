@@ -134,6 +134,16 @@ const DICT = {
     confirmEmailHeading: '请查收邮箱',
     confirmEmailBody: (v: Vars) =>
       `我们向 ${v.email} 发送了确认链接，点击后即可登录。`,
+    confirmEmailHint:
+      '没有收到？请检查垃圾邮件文件夹，或点击下方"重发邮件"。',
+    confirmEmailAlreadyHeading: '该邮箱已注册过',
+    confirmEmailAlreadyBody: (v: Vars) =>
+      `${v.email} 之前已注册但尚未确认。Supabase 不会重复发送邮件，请点击下方按钮重发，或如果你已确认过则直接登录。`,
+    confirmEmailResend: '重发确认邮件',
+    confirmEmailResending: '发送中…',
+    confirmEmailResent: '邮件已重新发送，请查收。',
+    confirmEmailResendFailed: (v: Vars) => `重发失败：${v.msg}`,
+    confirmEmailGoLogin: '直接登录',
 
     /* Password strength rules */
     pwRuleLen: '至少 8 位',
@@ -331,6 +341,16 @@ const DICT = {
     confirmEmailHeading: 'Check your inbox',
     confirmEmailBody: (v: Vars) =>
       `We sent a confirmation link to ${v.email}. Click it to finish signing up.`,
+    confirmEmailHint:
+      'Didn\u2019t get it? Check your spam folder, or use "Resend email" below.',
+    confirmEmailAlreadyHeading: 'This email is already registered',
+    confirmEmailAlreadyBody: (v: Vars) =>
+      `${v.email} was registered before but never confirmed. Supabase won\u2019t auto-send another email — tap below to resend, or sign in if you already confirmed.`,
+    confirmEmailResend: 'Resend confirmation email',
+    confirmEmailResending: 'Sending\u2026',
+    confirmEmailResent: 'Email sent again — please check your inbox.',
+    confirmEmailResendFailed: (v: Vars) => `Resend failed: ${v.msg}`,
+    confirmEmailGoLogin: 'Go to sign-in',
 
     /* Password strength rules */
     pwRuleLen: 'At least 8 characters',

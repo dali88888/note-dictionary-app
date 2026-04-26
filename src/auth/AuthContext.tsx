@@ -32,6 +32,22 @@ interface SignupArgs {
   role: UserRole;
 }
 
+interface SignupResult {
+  error: string | null;
+  needsEmailConfirm: boolean;
+  /**
+   * True when Supabase reports the email is already registered but
+   * unconfirmed.  In that case Supabase silently does NOT send a new
+   * confirmation email (anti-enumeration), so the UI should switch
+   * to "we already sent you a link — resend or sign in" copy instead
+   * of a hopeful "check your inbox".
+   *
+   * Detection: Supabase v2's signUp returns a user object with
+   * `identities: []` for this case.
+   */
+  alreadyRegistered: boolean;
+}
+
 interface AuthContextValue {
   status: Status;
   session: Session | null;
@@ -39,9 +55,16 @@ interface AuthContextValue {
   /** True when env vars are missing — UI should show a config-error banner. */
   configMissing: boolean;
   /** Auth APIs.  All resolve with a friendly error message string on failure. */
-  signUpEmail: (args: SignupArgs) => Promise<{ error: string | null; needsEmailConfirm: boolean }>;
+  signUpEmail: (args: SignupArgs) => Promise<SignupResult>;
   signInEmail: (email: string, password: string) => Promise<{ error: string | null }>;
   signInOAuth: (provider: 'google' | 'github') => Promise<{ error: string | null }>;
+  /**
+   * Re-send the signup confirmation email.  Use when the user clicked
+   * "register" with an email that was already pending confirmation, or
+   * when their first email got lost.  Supabase enforces an hourly
+   * rate-limit per email, so frequent calls return an error.
+   */
+  resendConfirmation: (email: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   /** Refetch the profile row (call after editing display_name or role). */
   refreshProfile: () => Promise<void>;
@@ -137,13 +160,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Stored on auth.users.raw_user_meta_data; the on_auth_user_created
           // trigger reads display_name + role from here to seed public.profiles.
           data: { display_name: displayName, role },
-          emailRedirectTo: window.location.origin,
+          // Supabase ignores this URL unless it (or a wildcard match) is
+          // listed in Authentication → URL Configuration → Redirect URLs.
+          // When ignored, the email's confirm link falls back to "Site URL"
+          // — so make sure both are configured in the dashboard.  The
+          // trailing slash makes the full URL match a `…/**` whitelist
+          // entry without ambiguity.
+          emailRedirectTo: `${window.location.origin}/`,
         },
       });
-      if (error) return { error: error.message, needsEmailConfirm: false };
+      if (error) {
+        return { error: error.message, needsEmailConfirm: false, alreadyRegistered: false };
+      }
+      // Supabase v2 anti-enumeration: when the email is already in
+      // auth.users (regardless of confirmed state), signUp returns a
+      // user object whose `identities` array is empty AND no session.
+      // No confirmation email is re-sent in that case — surfacing this
+      // explicitly lets the UI offer "resend" or "go to login" rather
+      // than waiting forever.
+      const identities = data.user?.identities ?? [];
+      const alreadyRegistered = !!data.user && identities.length === 0;
       // If email confirmation is required, supabase returns user but no session.
       const needsEmailConfirm = !data.session;
-      return { error: null, needsEmailConfirm };
+      return { error: null, needsEmailConfirm, alreadyRegistered };
+    },
+    [],
+  );
+
+  const resendConfirmation = useCallback<AuthContextValue['resendConfirmation']>(
+    async (email) => {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo: `${window.location.origin}/` },
+      });
+      return { error: error?.message ?? null };
     },
     [],
   );
@@ -159,7 +210,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInOAuth = useCallback<AuthContextValue['signInOAuth']>(async (provider) => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: window.location.origin },
+      // Same Redirect URLs whitelist requirement as emailRedirectTo —
+      // see signUpEmail above for why the trailing slash matters.
+      options: { redirectTo: `${window.location.origin}/` },
     });
     return { error: error?.message ?? null };
   }, []);
@@ -195,6 +248,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUpEmail,
       signInEmail,
       signInOAuth,
+      resendConfirmation,
       signOut,
       refreshProfile,
       authModalOpen,
@@ -209,6 +263,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUpEmail,
       signInEmail,
       signInOAuth,
+      resendConfirmation,
       signOut,
       refreshProfile,
       authModalOpen,
