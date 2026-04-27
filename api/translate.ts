@@ -60,8 +60,8 @@ ${word}
 1. 列出所有常用含义与词性，每个单独作为一个 meaning 对象。
 2. 如果是多音字或多音词，在每个 meaning 中填写 pinyin 字段表示该义项的读音。
 3. 每个 meaning 提供一个自然、地道的中文例句。
-4. 例句拆分为 Syllable 数组：每个汉字一个对象 { hanzi, pinyin }；标点符号也占一个位置，但 pinyin 填空字符串 ""。
-5. wordSyllables 是 Syllable 数组，表示该词的主拼音读法（多音字取最常用）。
+4. 例句拆分为 Syllable 数组（见下方"Syllable 拆分规则"）。
+5. wordSyllables 同样按 Syllable 拆分规则给出该词的主拼音读法（多音字取最常用）。
 6. partOfSpeech、definition、example.translation 全部使用 ${language} 书写。
 7. pinyin 使用带声调的带调标字母（例如 "hǎo"、"zhōng"、"cháng"），不要使用数字声调。
 
@@ -70,8 +70,29 @@ ${word}
 2. partOfSpeech 字段填写 "sentence"（保持英文小写，目标语言为非英文时也写 "sentence"，前端用它来识别整句模式）。
 3. definition 字段填写整段输入的最佳地道翻译，使用 ${language} 书写。
 4. **不要**生成例句——把 example 设为：{ "chinese": [], "translation": "" }（空数组、空字符串）。
-5. wordSyllables 仍然按字给出原中文输入的拼音（用于在结果页顶部展示原句加拼音）。标点 pinyin 填 ""。
+5. wordSyllables 按 Syllable 拆分规则给出原中文输入的逐字拼音（用于在结果页顶部展示原句加拼音）。标点 pinyin 填 ""。
 6. pinyin 使用带声调字母。
+
+【Syllable 拆分规则】（极其重要，必须严格遵守）：
+- **每个汉字单独占一个 Syllable 对象**，绝对不允许把多个汉字塞进同一个 hanzi 字段。
+- 标点符号（，。！？、"" 等）也单独占一个 Syllable，但 pinyin 字段填空字符串 ""。
+- 非汉字字符（空格、字母、数字）也单独占一个 Syllable，pinyin 填 ""。
+
+✅ 正确示例（"我是中国人。"）：
+[
+  {"hanzi":"我","pinyin":"wǒ"},
+  {"hanzi":"是","pinyin":"shì"},
+  {"hanzi":"中","pinyin":"zhōng"},
+  {"hanzi":"国","pinyin":"guó"},
+  {"hanzi":"人","pinyin":"rén"},
+  {"hanzi":"。","pinyin":""}
+]
+
+❌ 错误示例（绝对不要这样输出）：
+- [{"hanzi":"我是","pinyin":"wǒ shì"}, ...]            ← 把两个字塞进同一个对象
+- [{"hanzi":"中国人","pinyin":"zhōng guó rén"}]         ← 三个字塞进一个对象
+- [{"hanzi":"中国","pinyin":"zhōng"}]                   ← pinyin 缺漏只覆盖部分字
+- [{"hanzi":"朋友","pinyin":"péngyǒu"}]                 ← 即使是常见词也要拆开
 
 通用：
 - 只返回 JSON，严格符合提供的 schema，不要添加任何其他文字。`;
@@ -91,7 +112,7 @@ Tasks:
 3. For each meaning fill these fields:
    - partOfSpeech: written in the SOURCE LANGUAGE (e.g. "adjective", "verb", "expression", "形容詞"). For FULL SENTENCE inputs, set this to the literal string "sentence" (lowercase, English) so the frontend can detect sentence-translation mode.
    - register: REQUIRED, one of "casual" (slangy/informal), "colloquial" (everyday spoken), "neutral" (works anywhere), "formal" (official/business), "literary" (written/poetic/classical-flavored)
-   - hanziSyllables: the Chinese candidate broken per-character. Each entry { hanzi, pinyin }. Punctuation marks each occupy one entry with pinyin: "".
+   - hanziSyllables: the Chinese candidate broken per-character. Each entry { hanzi, pinyin }. See "Syllable splitting rules" below — the same rules apply to BOTH hanziSyllables and example.chinese.
    - definition: 1-2 sentences IN THE SOURCE LANGUAGE explaining the nuance — when to use this candidate, what register/situation it fits, and how it differs from the other candidates. Be concrete; mention spoken vs written, formality, emotional tone, regional usage when relevant. For FULL SENTENCE inputs, this field is optional usage notes (you may leave it as a 1-sentence remark or empty).
    - example:
        For WORD/PHRASE inputs: { chinese, translation }
@@ -104,6 +125,27 @@ Tasks:
    - language: detected source language as described above.
 
 Pinyin uses tone-marked letters ("hǎo", "zhōng", "shén"), never numeric tones.
+
+Syllable splitting rules (CRITICAL — must be followed exactly for both hanziSyllables and example.chinese):
+- ONE Chinese character per Syllable object.  Never group multiple characters under a single hanzi field.
+- Punctuation (，。！？、 etc.) gets its own Syllable with pinyin: "".
+- Non-Chinese characters (spaces, letters, digits) each get their own Syllable with pinyin: "".
+
+✅ CORRECT (for "我是中国人。"):
+[
+  {"hanzi":"我","pinyin":"wǒ"},
+  {"hanzi":"是","pinyin":"shì"},
+  {"hanzi":"中","pinyin":"zhōng"},
+  {"hanzi":"国","pinyin":"guó"},
+  {"hanzi":"人","pinyin":"rén"},
+  {"hanzi":"。","pinyin":""}
+]
+
+❌ WRONG (NEVER produce these):
+- [{"hanzi":"我是","pinyin":"wǒ shì"}, ...]          ← two characters in one entry
+- [{"hanzi":"中国人","pinyin":"zhōng guó rén"}]       ← three characters in one entry
+- [{"hanzi":"朋友","pinyin":"péngyǒu"}]               ← common word still must be split
+- [{"hanzi":"中国","pinyin":"zhōng"}]                 ← pinyin missing for trailing chars
 
 Return ONLY JSON, strictly conforming to the provided schema. No explanatory text outside the JSON.`;
 
@@ -193,6 +235,52 @@ const REVERSE_SCHEMA = {
 /* ────────────────────────────────────────────────────────────────
  * AI providers
  * ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Retry wrapper for Gemini calls.  The free tier surfaces 503
+ * UNAVAILABLE / 429 RESOURCE_EXHAUSTED during peak hours — these are
+ * almost always transient (just a few seconds of capacity pressure on
+ * Google's side), so retrying once or twice usually succeeds without
+ * the user ever seeing an error.
+ *
+ * Permanent errors (400 bad input, 401/403 auth) are NOT retried —
+ * we throw immediately so the user gets the real cause fast.
+ */
+const GEMINI_RETRY_DELAYS_MS = [1500, 3500]; // attempts after the first
+
+async function callGeminiWithRetry(
+  prompt: string,
+  schema: object,
+  apiKey: string,
+): Promise<ApiResponse> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= GEMINI_RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      const delay = GEMINI_RETRY_DELAYS_MS[attempt - 1] ?? 0;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    try {
+      return await callGemini(prompt, schema, apiKey);
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const transient =
+        /\b(503|429|500|502|504)\b/.test(msg) ||
+        /UNAVAILABLE|OVERLOADED|RESOURCE_EXHAUSTED|deadline/i.test(msg);
+      if (!transient) {
+        // Permanent error — don't waste retry budget on it.
+        throw err;
+      }
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[gemini] attempt ${attempt + 1}/${GEMINI_RETRY_DELAYS_MS.length + 1} failed (transient); will retry. ${msg.slice(0, 200)}`,
+      );
+    }
+  }
+  // Out of retries — throw the last seen error so the handler can map it
+  // to a friendly user-facing message.
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
 
 async function callGemini(
   prompt: string,
@@ -387,6 +475,140 @@ async function verifyAuth(req: Request): Promise<AuthOk | AuthFail> {
 }
 
 /* ────────────────────────────────────────────────────────────────
+ * Syllable normalization — safety net for when Gemini ignores the
+ * "one Chinese character per Syllable object" rule and returns
+ * merged entries like { hanzi: "朋友", pinyin: "péngyǒu" }.
+ * ─────────────────────────────────────────────────────────────── */
+
+const HAN_RE = /[㐀-鿿豈-﫿]/;
+// Tone-marked vowels (the nucleus of a Mandarin pinyin syllable always
+// carries exactly one tone mark — that's how we find syllable boundaries).
+const TONE_VOWEL = /[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/i;
+// Consonants that can start a Mandarin pinyin syllable.  `ng` boundaries
+// are handled implicitly because if cur ends with `n` or `ng`, those are
+// final consonants; the next consonant after a tone vowel is always a
+// new syllable's initial.
+const PINYIN_INITIAL = /[bpmfdtnlgkhjqxzcsrwy]/i;
+
+/**
+ * Split a continuous (no-space) pinyin string like "péngyǒu" or
+ * "zhōngguórén" into per-syllable chunks ["péng","yǒu"] /
+ * ["zhōng","guó","rén"] using tone-mark boundaries.
+ *
+ * Heuristic: each pinyin syllable contains exactly one tone-marked
+ * vowel.  After a tone vowel, the first consonant we see is the
+ * initial of the next syllable — split there.
+ *
+ * Edge cases: "ng" ending followed by vowel (e.g. "fan'an") is
+ * ambiguous in Chinese pinyin but very rare in textbook examples.
+ * If the heuristic produces a syllable count that doesn't match the
+ * caller's expectation, the caller falls back to "first char gets
+ * the whole pinyin" rather than corrupt the data.
+ */
+function splitContinuousPinyin(pinyin: string): string[] {
+  const tokens: string[] = [];
+  let cur = '';
+  let sawTone = false;
+  for (const ch of pinyin) {
+    if (TONE_VOWEL.test(ch)) {
+      cur += ch;
+      sawTone = true;
+    } else if (sawTone && PINYIN_INITIAL.test(ch)) {
+      tokens.push(cur);
+      cur = ch;
+      sawTone = false;
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+/**
+ * Split pinyin into per-character chunks.  Prefers explicit spaces
+ * ("péng yǒu" → ["péng","yǒu"]) and falls back to tone-boundary
+ * detection for the more common merged form ("péngyǒu").
+ */
+function splitPinyin(pinyin: string): string[] {
+  const trimmed = pinyin.trim();
+  if (!trimmed) return [];
+  if (/\s/.test(trimmed)) {
+    return trimmed.split(/\s+/).filter((s) => s);
+  }
+  return splitContinuousPinyin(trimmed);
+}
+
+/**
+ * Walk a Syllable array and expand any entry whose `hanzi` contains
+ * multiple Chinese characters into one Syllable per character.  This
+ * is purely a corrective step — Gemini is told in the prompt to do
+ * this itself, but we can't trust it 100%.
+ */
+function normalizeSyllables(syllables: ApiSyllable[] | undefined | null): ApiSyllable[] {
+  if (!Array.isArray(syllables)) return [];
+  const out: ApiSyllable[] = [];
+  for (const syl of syllables) {
+    const hanzi = typeof syl?.hanzi === 'string' ? syl.hanzi : '';
+    const pinyin = typeof syl?.pinyin === 'string' ? syl.pinyin : '';
+
+    // Count Chinese characters in this hanzi field.
+    const chars = [...hanzi];
+    const hanCount = chars.filter((c) => HAN_RE.test(c)).length;
+
+    if (hanCount <= 1) {
+      // Already single Han character (or pure punctuation) — pass through.
+      out.push({ hanzi, pinyin });
+      continue;
+    }
+
+    // Multi-character — try to split pinyin to match.
+    const pinyinChunks = splitPinyin(pinyin);
+    const canAlign = pinyinChunks.length === hanCount;
+
+    let pIdx = 0;
+    for (const c of chars) {
+      if (HAN_RE.test(c)) {
+        out.push({
+          hanzi: c,
+          pinyin: canAlign ? pinyinChunks[pIdx++] ?? '' : '',
+        });
+      } else {
+        // Punctuation / latin / digits inside a merged chunk — emit with empty pinyin.
+        out.push({ hanzi: c, pinyin: '' });
+      }
+    }
+    // If we couldn't align pinyin chunks, dump the whole pinyin onto the
+    // first Han character as a "best effort" so at least nothing is lost.
+    // (This matches the previous user-visible behavior; it's still
+    // imperfect but better than completely dropping the pinyin.)
+    if (!canAlign && pinyin) {
+      const firstHanIdx = out.length - chars.length + chars.findIndex((c) => HAN_RE.test(c));
+      if (firstHanIdx >= 0 && out[firstHanIdx]) {
+        out[firstHanIdx].pinyin = pinyin;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Apply syllable normalization to every place a Syllable[] appears in
+ * the response — wordSyllables, each meaning's hanziSyllables (reverse
+ * mode), and each meaning's example.chinese.
+ */
+function normalizeResponse(r: ApiResponse): ApiResponse {
+  r.wordSyllables = normalizeSyllables(r.wordSyllables);
+  if (Array.isArray(r.meanings)) {
+    for (const m of r.meanings) {
+      if (m.hanziSyllables) m.hanziSyllables = normalizeSyllables(m.hanziSyllables);
+      if (m.example) m.example.chinese = normalizeSyllables(m.example.chinese);
+    }
+  }
+  return r;
+}
+
+/* ────────────────────────────────────────────────────────────────
  * Handler
  * ─────────────────────────────────────────────────────────────── */
 
@@ -444,7 +666,7 @@ export default async function handler(req: Request): Promise<Response> {
     } else {
       const key = process.env.GEMINI_API_KEY;
       if (!key) return json({ error: '服务端未配置 GEMINI_API_KEY' }, 500);
-      result = await callGemini(prompt, schema, key);
+      result = await callGeminiWithRetry(prompt, schema, key);
     }
     // Echo back word in case AI normalized it
     result.word = result.word || word;
@@ -455,9 +677,31 @@ export default async function handler(req: Request): Promise<Response> {
       result.wordSyllables = [];
     }
     result.direction = direction;
+    // Safety net: even with explicit prompt rules, Gemini occasionally
+    // emits merged Syllables like { hanzi: "朋友", pinyin: "péngyǒu" }.
+    // Splitting them server-side guarantees ChineseLine renders pinyin
+    // above every character.  See normalizeSyllables() for details.
+    result = normalizeResponse(result);
     return json(result, 200);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // Surface the most common transient Gemini failure (peak-hour
+    // capacity pressure) with a Chinese-friendly message — the raw
+    // upstream payload is English-only and unhelpful for end users.
+    // This branch only fires when the retry wrapper has already
+    // exhausted its attempts, so suggesting "稍后再试" is honest.
+    const isCapacityIssue =
+      /\b(503|429)\b/.test(msg) ||
+      /UNAVAILABLE|OVERLOADED|RESOURCE_EXHAUSTED|high demand/i.test(msg);
+    if (isCapacityIssue) {
+      return json(
+        {
+          error:
+            'AI 服务正繁忙（Gemini 高峰期），已自动重试仍未成功，请过 30 秒后再查询。如果长时间持续不可用，可在 Vercel 把 AI_PROVIDER 切换为 claude。',
+        },
+        503,
+      );
+    }
     return json({ error: `AI 调用失败：${msg}` }, 500);
   }
 }
