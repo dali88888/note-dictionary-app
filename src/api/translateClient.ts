@@ -1,5 +1,5 @@
 import type { TranslateResponse, TranslationDirection } from '../types/dictionary';
-import { supabase } from '../auth/supabaseClient';
+import { supabase, withTimeout } from '../auth/supabaseClient';
 
 export class TranslateError extends Error {
   constructor(message: string, public status?: number) {
@@ -37,9 +37,19 @@ export async function translateWord(
   // before each request.  If the token is still expired (e.g. tab was
   // sleeping), the server returns 401 and the user gets the "please sign
   // in again" message naturally.
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  //
+  // Wrapped in `withTimeout(3s)` — see dictStore.getCurrentUserId for
+  // the same defense.  If getSession() hangs we proceed without a
+  // Bearer token rather than hold up the entire query: /api/translate
+  // accepts anon traffic, so the worst case is the user's query
+  // doesn't get cloud-saved that one time.
+  const sessionData = await withTimeout(
+    supabase.auth.getSession().then((r) => r.data),
+    3000,
+    { session: null } as Awaited<ReturnType<typeof supabase.auth.getSession>>['data'],
+    'translateClient/getSession',
+  );
+  const session = sessionData.session;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

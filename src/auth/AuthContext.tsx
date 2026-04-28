@@ -19,7 +19,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase, supabaseConfigured } from './supabaseClient';
+import { supabase, supabaseConfigured, withTimeout } from './supabaseClient';
 import type { Profile, UserRole } from './types';
 
 type Status = 'loading' | 'authed' | 'anon';
@@ -229,8 +229,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInEmail = useCallback<AuthContextValue['signInEmail']>(
     async (email, password) => {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      return { error: error?.message ?? null };
+      // Hard 15s ceiling on the sign-in call.  Field reports of "登录中…
+      // forever" mean signInWithPassword sometimes never resolves
+      // (suspected internal mutex / orphaned auto-refresh on a stale
+      // session).  Without a timeout the LoginForm button stays in
+      // its busy state and the user is dead in the water.
+      //
+      // On timeout we surface a friendly Chinese error string so the
+      // form's `setBusy(false)` runs and the user can retry.  The
+      // legitimate worst case for sign-in (round-trip to Supabase
+      // Auth + fetchProfile) is well under 5 s, so 15 s is generous
+      // and almost never fires for a healthy network.
+      const result = await withTimeout(
+        supabase.auth.signInWithPassword({ email, password }),
+        15000,
+        { error: { message: '登录超时（15s）。请检查网络后重试，或刷新页面后再次尝试。' } as { message: string } } as Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>,
+        'signInWithPassword',
+      );
+      return { error: result.error?.message ?? null };
     },
     [],
   );

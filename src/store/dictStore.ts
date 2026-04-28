@@ -31,7 +31,7 @@ import type {
 } from '../types/dictionary';
 import { translateWord } from '../api/translateClient';
 import type { UILang } from '../i18n';
-import { supabase } from '../auth/supabaseClient';
+import { supabase, withTimeout } from '../auth/supabaseClient';
 import type { ManagedStudent } from '../auth/types';
 
 const DEFAULT_LANGUAGE = 'English';
@@ -130,9 +130,20 @@ function dateKey(ts: number): string {
  * was even set — the user clicked Search and saw absolutely nothing
  * happen.  `getSession()` returns `{ session: null }` cleanly for
  * anon and never throws.
+ *
+ * Wrapped in `withTimeout(3s)` — even with `lock: noopLock` we've had
+ * sporadic reports of getSession() never resolving (suspected SDK
+ * mutex with a pending auto-refresh).  On timeout we treat the user
+ * as anonymous so `query()` can proceed against /api/translate
+ * without a Bearer token instead of leaving the spinner stuck.
  */
 async function getCurrentUserId(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
+  const data = await withTimeout(
+    supabase.auth.getSession().then((r) => r.data),
+    3000,
+    { session: null } as Awaited<ReturnType<typeof supabase.auth.getSession>>['data'],
+    'dictStore.getCurrentUserId/getSession',
+  );
   return data.session?.user.id ?? null;
 }
 

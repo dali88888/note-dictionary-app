@@ -58,3 +58,42 @@ export const supabase = createClient(url ?? '', key ?? '', {
 });
 
 export const supabaseConfigured = Boolean(url && key);
+
+/**
+ * Race a promise against a hard timeout.
+ *
+ * Defensive layer for any supabase.auth.* call: even after disabling
+ * navigator.locks (see `noopLock` above) we've seen sporadic
+ * "查询中… forever" / "登录中… forever" reports, where some internal
+ * mutex or pending refresh blocks `getSession()` / `signInWithPassword()`
+ * indefinitely.  Wrapping every hot-path auth call in this timeout
+ * guarantees the UI always recovers within `ms` even if the SDK
+ * decides to never resolve the underlying promise.
+ *
+ * On timeout the returned promise resolves with `fallback`.  Callers
+ * choose a fallback that lets the app continue degraded but
+ * functional (e.g. "treat as anon", "no Bearer token", "surface a
+ * sign-in error string").
+ */
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+  label?: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timed = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      if (label) {
+        // eslint-disable-next-line no-console
+        console.warn(`[withTimeout] ${label} did not resolve in ${ms}ms; using fallback`);
+      }
+      resolve(fallback);
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, timed]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
