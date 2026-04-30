@@ -237,57 +237,85 @@ const REVERSE_SCHEMA = {
  * ─────────────────────────────────────────────────────────────── */
 
 /**
- * Retry wrapper for Gemini calls.  The free tier surfaces 503
- * UNAVAILABLE / 429 RESOURCE_EXHAUSTED during peak hours — these are
- * almost always transient (just a few seconds of capacity pressure on
- * Google's side), so retrying once or twice usually succeeds without
- * the user ever seeing an error.
+ * Two-tier strategy for transient Gemini failures.
  *
- * Permanent errors (400 bad input, 401/403 auth) are NOT retried —
- * we throw immediately so the user gets the real cause fast.
+ * Tier 1: callGeminiWithRetry on the PRIMARY model (gemini-2.5-flash).
+ *   The free tier surfaces 503 UNAVAILABLE / 429 RESOURCE_EXHAUSTED
+ *   during peak hours — these are usually short capacity blips on
+ *   Google's side, so 2 retries with 1.5s + 3.5s backoff usually
+ *   succeeds without the user ever seeing an error.
+ *
+ * Tier 2: if the primary still fails after retries, try the FALLBACK
+ *   model (gemini-2.5-flash-lite) once.  Lite is a separate model on
+ *   different infra with its own load profile — when 2.5-flash is
+ *   under pressure, lite usually isn't, and vice versa.  Quality
+ *   for dictionary lookups is comparable.
+ *
+ * Permanent errors (400 bad input, 401/403 auth) bypass retries and
+ * the fallback entirely — we throw immediately so the real cause
+ * surfaces fast.
  */
-const GEMINI_RETRY_DELAYS_MS = [1500, 3500]; // attempts after the first
+const GEMINI_PRIMARY_MODEL = 'gemini-2.5-flash';
+const GEMINI_FALLBACK_MODEL = 'gemini-2.5-flash-lite';
+const GEMINI_RETRY_DELAYS_MS = [1500, 3500]; // attempts after the first, on PRIMARY only
 
-async function callGeminiWithRetry(
+function isTransientGeminiError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /\b(503|429|500|502|504)\b/.test(msg) ||
+    /UNAVAILABLE|OVERLOADED|RESOURCE_EXHAUSTED|deadline/i.test(msg)
+  );
+}
+
+async function callGeminiWithRetryAndFallback(
   prompt: string,
   schema: object,
   apiKey: string,
 ): Promise<ApiResponse> {
   let lastErr: unknown;
+  // Tier 1: primary model with retries.
   for (let attempt = 0; attempt <= GEMINI_RETRY_DELAYS_MS.length; attempt++) {
     if (attempt > 0) {
       const delay = GEMINI_RETRY_DELAYS_MS[attempt - 1] ?? 0;
       await new Promise((r) => setTimeout(r, delay));
     }
     try {
-      return await callGemini(prompt, schema, apiKey);
+      return await callGemini(GEMINI_PRIMARY_MODEL, prompt, schema, apiKey);
     } catch (err) {
       lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      const transient =
-        /\b(503|429|500|502|504)\b/.test(msg) ||
-        /UNAVAILABLE|OVERLOADED|RESOURCE_EXHAUSTED|deadline/i.test(msg);
-      if (!transient) {
-        // Permanent error — don't waste retry budget on it.
+      if (!isTransientGeminiError(err)) {
+        // Permanent — bail out, no fallback.
         throw err;
       }
+      const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
       console.warn(
-        `[gemini] attempt ${attempt + 1}/${GEMINI_RETRY_DELAYS_MS.length + 1} failed (transient); will retry. ${msg.slice(0, 200)}`,
+        `[gemini] primary attempt ${attempt + 1}/${GEMINI_RETRY_DELAYS_MS.length + 1} failed (transient): ${msg.slice(0, 200)}`,
       );
     }
   }
-  // Out of retries — throw the last seen error so the handler can map it
-  // to a friendly user-facing message.
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  // Tier 2: fallback model, single shot.
+  try {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[gemini] primary ${GEMINI_PRIMARY_MODEL} exhausted; falling back to ${GEMINI_FALLBACK_MODEL}`,
+    );
+    return await callGemini(GEMINI_FALLBACK_MODEL, prompt, schema, apiKey);
+  } catch (err) {
+    // If the fallback also failed, throw the worst error we saw.  Prefer
+    // the fallback's error since it's the most recent, but if the fallback
+    // failed the same way, the primary's error is just as useful.
+    throw err instanceof Error ? err : new Error(String(err));
+  }
 }
 
 async function callGemini(
+  model: string,
   prompt: string,
   schema: object,
   apiKey: string,
 ): Promise<ApiResponse> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: {
@@ -666,7 +694,7 @@ export default async function handler(req: Request): Promise<Response> {
     } else {
       const key = process.env.GEMINI_API_KEY;
       if (!key) return json({ error: '服务端未配置 GEMINI_API_KEY' }, 500);
-      result = await callGeminiWithRetry(prompt, schema, key);
+      result = await callGeminiWithRetryAndFallback(prompt, schema, key);
     }
     // Echo back word in case AI normalized it
     result.word = result.word || word;
@@ -697,7 +725,7 @@ export default async function handler(req: Request): Promise<Response> {
       return json(
         {
           error:
-            'AI 服务正繁忙（Gemini 高峰期），已自动重试仍未成功，请过 30 秒后再查询。如果长时间持续不可用，可在 Vercel 把 AI_PROVIDER 切换为 claude。',
+            'AI 服务正繁忙（Gemini 高峰期），已自动重试主模型 + 备用模型仍未成功，请过 30 秒后再查询。如果长时间持续不可用，可在 Vercel 把 AI_PROVIDER 切换为 claude。',
         },
         503,
       );

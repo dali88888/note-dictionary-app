@@ -157,6 +157,8 @@ const DICT = {
     authConfigMissingTitle: '认证服务未配置',
     authConfigMissingBody:
       '请在 .env.local 中填入 Supabase 凭据（URL + publishable key）后重新加载。',
+    /* Recovery action — shown next to "登录响应超时" errors */
+    reloadPage: '刷新页面重试',
 
     /* Top-bar user menu */
     signOutBtn: '退出登录',
@@ -365,6 +367,8 @@ const DICT = {
     authConfigMissingTitle: 'Auth not configured',
     authConfigMissingBody:
       'Set the Supabase URL + publishable key in .env.local and reload.',
+    /* Recovery action — shown next to "Sign-in timeout" errors */
+    reloadPage: 'Reload page & retry',
 
     /* Top-bar user menu */
     signOutBtn: 'Sign out',

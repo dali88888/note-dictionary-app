@@ -53,9 +53,21 @@ export function LoginForm() {
       </div>
 
       {err && (
-        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
-          {err}
-        </p>
+        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 space-y-1.5">
+          <p>{err}</p>
+          {/* The "登录响应超时" path means our retries hit the wall and the
+              SDK is likely wedged — surface a one-click reload so the
+              user doesn't have to find the browser refresh button. */}
+          {/超时|timeout/i.test(err) && (
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="text-xs font-medium px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+            >
+              {t('reloadPage')}
+            </button>
+          )}
+        </div>
       )}
 
       <Button

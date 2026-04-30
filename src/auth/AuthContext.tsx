@@ -19,7 +19,11 @@ import {
   type ReactNode,
 } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase, supabaseConfigured, withTimeout } from './supabaseClient';
+import {
+  supabase,
+  supabaseConfigured,
+  directSignInEmail,
+} from './supabaseClient';
 import type { Profile, UserRole } from './types';
 
 type Status = 'loading' | 'authed' | 'anon';
@@ -229,24 +233,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInEmail = useCallback<AuthContextValue['signInEmail']>(
     async (email, password) => {
-      // Hard 15s ceiling on the sign-in call.  Field reports of "登录中…
-      // forever" mean signInWithPassword sometimes never resolves
-      // (suspected internal mutex / orphaned auto-refresh on a stale
-      // session).  Without a timeout the LoginForm button stays in
-      // its busy state and the user is dead in the water.
+      // Sign-in goes through `directSignInEmail`, NOT through the SDK's
+      // `signInWithPassword`.  Field reports: even with `lock: noopLock`
+      // and a 15 s timeout, sometimes the SDK's own fetch never returns
+      // AND every subsequent click also times out — only a hard refresh
+      // recovers.  Going around the SDK with our own AbortController +
+      // setSession decouples each click from any wedged in-flight call.
+      // See supabaseClient.ts → directSignInEmail for the details.
       //
-      // On timeout we surface a friendly Chinese error string so the
-      // form's `setBusy(false)` runs and the user can retry.  The
-      // legitimate worst case for sign-in (round-trip to Supabase
-      // Auth + fetchProfile) is well under 5 s, so 15 s is generous
-      // and almost never fires for a healthy network.
-      const result = await withTimeout(
-        supabase.auth.signInWithPassword({ email, password }),
-        15000,
-        { error: { message: '登录超时（15s）。请检查网络后重试，或刷新页面后再次尝试。' } as { message: string } } as Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>,
-        'signInWithPassword',
-      );
-      return { error: result.error?.message ?? null };
+      // Auto-retry once: the most common failure is a transient network
+      // blip / Supabase slow start.  A second attempt with a fresh
+      // fetch usually succeeds within the same user click.
+      let result = await directSignInEmail(email, password);
+      if (result.error && result.transient) {
+        // eslint-disable-next-line no-console
+        console.warn('[signIn] first attempt timed out; retrying once');
+        result = await directSignInEmail(email, password);
+      }
+      if (result.error && result.transient) {
+        return {
+          error:
+            '登录响应超时。可能是网络抖动，请稍等几秒后再点登录；如果反复失败，请刷新页面后重试。',
+        };
+      }
+      return { error: result.error };
     },
     [],
   );
