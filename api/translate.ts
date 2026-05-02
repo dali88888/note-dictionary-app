@@ -38,6 +38,14 @@ interface ApiResponse {
   wordSyllables: ApiSyllable[];
   language: string;
   meanings: ApiMeaning[];
+  /**
+   * True when the response was served from the global dictionary_cache
+   * (i.e. some earlier request — possibly from a different user — had
+   * already paid the AI cost for this exact (word, language, direction)).
+   * Drives the "⚡ 已缓存" badge on the client; absent or false on cache
+   * miss.
+   */
+  _fromCache?: boolean;
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -637,6 +645,143 @@ function normalizeResponse(r: ApiResponse): ApiResponse {
 }
 
 /* ────────────────────────────────────────────────────────────────
+ * Global dictionary cache (Supabase `dictionary_cache` table)
+ *
+ * Why server-side instead of just client-side: a per-user / per-device
+ * cache only helps the same person on the same device.  A shared
+ * library ensures the AI is called at most once across ALL users for
+ * the same (word, language, direction) — instant + zero-cost on every
+ * subsequent query, no matter who issued the original.
+ *
+ * Schema lives in supabase/schema.sql (v2 migration block).  RLS is
+ * open (SELECT + INSERT for everyone) because rows contain no PII —
+ * just the AI's translation output, identical no matter who asked.
+ *
+ * Cache key:
+ *   forward (zh-to-other): word_normalized + language (both lowercased)
+ *   reverse (other-to-zh): word_normalized only (language is auto-
+ *     detected by the AI; same English input from different users
+ *     gets the same Chinese candidates).
+ *
+ * Errors are non-fatal: a cache lookup failure means we just fall
+ * through to the AI; a cache write failure is logged but doesn't
+ * affect the user's response.
+ * ─────────────────────────────────────────────────────────────── */
+
+function normalizeCacheKey(word: string): string {
+  return word.trim().toLowerCase();
+}
+
+function cacheLanguageForWrite(direction: Direction, language: string): string {
+  return direction === 'zh-to-other' ? language.trim().toLowerCase() : '';
+}
+
+interface CachedRow {
+  payload: ApiResponse;
+}
+
+async function lookupCache(
+  direction: Direction,
+  word: string,
+  language: string,
+): Promise<ApiResponse | null> {
+  const supaUrl = envSupabaseUrl();
+  const supaKey = envSupabaseKey();
+  if (!supaUrl || !supaKey) return null; // can't cache without config
+
+  const wordKey = normalizeCacheKey(word);
+  const langKey = cacheLanguageForWrite(direction, language);
+
+  // PostgREST query: filter on direction + word_normalized; for forward
+  // also filter on language.  `select=payload` returns just the JSONB
+  // we need.  `limit=1` because the unique index guarantees at most one.
+  const params = new URLSearchParams({
+    direction: `eq.${direction}`,
+    word_normalized: `eq.${wordKey}`,
+    select: 'payload',
+    limit: '1',
+  });
+  if (direction === 'zh-to-other') {
+    params.set('language', `eq.${langKey}`);
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${supaUrl.replace(/\/+$/, '')}/rest/v1/dictionary_cache?${params}`,
+      { headers: { apikey: supaKey, authorization: `Bearer ${supaKey}` } },
+    );
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[cache] lookup network error; falling through to AI:', err);
+    return null;
+  }
+  if (!res.ok) {
+    // eslint-disable-next-line no-console
+    console.warn(`[cache] lookup HTTP ${res.status}; falling through to AI`);
+    return null;
+  }
+  let rows: CachedRow[];
+  try {
+    rows = (await res.json()) as CachedRow[];
+  } catch {
+    return null;
+  }
+  if (!rows || rows.length === 0) return null;
+  return rows[0].payload;
+}
+
+async function storeCache(
+  direction: Direction,
+  word: string,
+  language: string,
+  payload: ApiResponse,
+): Promise<void> {
+  const supaUrl = envSupabaseUrl();
+  const supaKey = envSupabaseKey();
+  if (!supaUrl || !supaKey) return;
+
+  const wordKey = normalizeCacheKey(word);
+  const langKey = cacheLanguageForWrite(direction, language);
+
+  // Bare INSERT.  If two users hit the same word concurrently and the
+  // unique index trips on the second insert, PostgREST returns 409 —
+  // we catch that and treat it as success (the cache already has the
+  // entry, just not from us).
+  try {
+    const res = await fetch(
+      `${supaUrl.replace(/\/+$/, '')}/rest/v1/dictionary_cache`,
+      {
+        method: 'POST',
+        headers: {
+          apikey: supaKey,
+          authorization: `Bearer ${supaKey}`,
+          'content-type': 'application/json',
+          // Don't return the inserted row — we don't need it.
+          prefer: 'return=minimal',
+        },
+        body: JSON.stringify({
+          direction,
+          word_normalized: wordKey,
+          language: langKey,
+          payload,
+        }),
+      },
+    );
+    if (!res.ok && res.status !== 409) {
+      const text = await res.text().catch(() => '');
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[cache] store HTTP ${res.status}: ${text.slice(0, 200)}`,
+      );
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[cache] store network error (non-fatal):', err);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
  * Handler
  * ─────────────────────────────────────────────────────────────── */
 
@@ -678,6 +823,16 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: '缺少 language 参数' }, 400);
   }
 
+  // ─── Global cache lookup ───────────────────────────────────────
+  // Check the shared dictionary_cache first.  If anyone has already
+  // queried this (word, language, direction), serve their AI result
+  // instantly and skip the Gemini call entirely.  Cache lookup is
+  // ~50–200ms — negligible vs the 5–15s AI call we save on hits.
+  const cached = await lookupCache(direction, word, language);
+  if (cached) {
+    return json({ ...cached, _fromCache: true } as ApiResponse, 200);
+  }
+
   const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
   const prompt =
     direction === 'other-to-zh'
@@ -710,7 +865,19 @@ export default async function handler(req: Request): Promise<Response> {
     // Splitting them server-side guarantees ChineseLine renders pinyin
     // above every character.  See normalizeSyllables() for details.
     result = normalizeResponse(result);
-    return json(result, 200);
+
+    // Write the AI result into the global cache, fire-and-forget.
+    // Failures are logged but never propagate to the user — a missed
+    // cache write only means the next caller pays the AI cost again.
+    // We use the language *from the response* when writing for
+    // forward direction (the AI might canonicalize "english" → "English"
+    // — but our cache key is lowercased so it doesn't matter).
+    storeCache(direction, word, language, result).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('[cache] post-AI write rejected:', e);
+    });
+
+    return json({ ...result, _fromCache: false } as ApiResponse, 200);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // Surface the most common transient Gemini failure (peak-hour

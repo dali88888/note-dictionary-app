@@ -70,7 +70,15 @@ export interface DictionaryEntry {
   queriedAt: number;
 }
 
-export type TranslateResponse = Omit<DictionaryEntry, 'id' | 'queriedAt'>;
+export type TranslateResponse = Omit<DictionaryEntry, 'id' | 'queriedAt'> & {
+  /**
+   * True when the API served this response from the global
+   * dictionary_cache (somebody else — or an earlier request from this
+   * user — had already paid the AI cost).  Drives the "⚡ 已缓存"
+   * badge.  Absent or false on cache miss.
+   */
+  _fromCache?: boolean;
+};
 
 export type SessionKind = 'auto' | 'manual';
 

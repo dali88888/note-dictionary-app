@@ -868,13 +868,20 @@ export const useDictStore = create<DictState>()(
             return;
           }
 
-          /* ─── Cache miss — call the AI ───────────────────────── */
+          /* ─── L1 miss — call /api/translate (which itself checks
+                 the global L2 cache before hitting the AI) ─────────── */
           const data = await translateWord(word, prefs.language, direction);
 
           const language =
             direction === 'zh-to-other'
               ? prefs.language
               : data.language?.trim() || 'auto';
+
+          // The server flags responses served from the global
+          // dictionary_cache with _fromCache:true so the badge can
+          // also fire on those (= someone else paid for this query
+          // earlier; we got it free).
+          const serverCacheHit = data._fromCache === true;
 
           // ── Anonymous path ─────────────────────────────────────────
           // Add to the persistent anon cache so future re-queries hit.
@@ -899,7 +906,7 @@ export const useDictStore = create<DictState>()(
               entries: { [id]: anonEntry },
               anonCache: addToAnonCache(anonCache, anonEntry),
               latestEntryId: id,
-              latestFromCache: false,
+              latestFromCache: serverCacheHit,
               loading: false,
               error: null,
             });
@@ -977,7 +984,12 @@ export const useDictStore = create<DictState>()(
             entries: { ...entries, [newEntry.id]: newEntry },
             sessions: updatedSessions,
             latestEntryId: newEntry.id,
-            latestFromCache: false,
+            // Signed-in user got the result from the global cache (a
+            // different user's earlier query paid the AI cost).  We
+            // still create our own entries row above so the lookup
+            // appears in this user's personal library and class
+            // sessions, but we credit the badge to the cache.
+            latestFromCache: serverCacheHit,
             loading: false,
             error: null,
           });

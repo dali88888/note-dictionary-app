@@ -151,3 +151,77 @@ create policy session_entries_owner_all on public.session_entries for all
       where s.id = session_id and s.owner_user_id = auth.uid()
     )
   );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- v2 migration · Global dictionary cache
+--
+-- A shared, write-once-read-many table.  /api/translate consults this
+-- before calling Gemini and writes the AI response back.  Same
+-- (direction, word, language) means the AI is called at most once
+-- across all users in perpetuity — instant + zero-cost on subsequent
+-- queries from anyone.
+--
+-- Privacy: stores only the AI's translation payload.  No user id,
+-- no timestamp tied to a user, no who-asked-what.  Safe to expose
+-- read+insert to anonymous traffic.
+-- ─────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.dictionary_cache (
+  id              uuid primary key default gen_random_uuid(),
+  direction       text not null check (direction in ('zh-to-other', 'other-to-zh')),
+  -- Lookup key: trimmed + lowercased.  Used by the unique indexes
+  -- below to dedupe across casing variants ("Happy" / "happy" /
+  -- "HAPPY" all hit one cache row).
+  word_normalized text not null,
+  -- For forward direction: the lowercased target language ("english",
+  -- "日本語", "tiếng việt", …).  For reverse direction: empty string
+  -- '' (the source language is auto-detected by the AI, so it's not
+  -- part of the lookup key — same English input from any user gets
+  -- the same Chinese candidates).
+  language        text not null default '',
+  -- Full TranslateResponse payload (word, language, wordSyllables,
+  -- meanings, direction).  We just hand this back to clients on hit.
+  payload         jsonb not null,
+  hits_count      int not null default 0,
+  created_at      timestamptz not null default now()
+);
+
+-- Two partial unique indexes: forward dedupes on (word, language),
+-- reverse dedupes on word alone (language is a payload detail).
+create unique index if not exists dictionary_cache_fwd_unique
+  on public.dictionary_cache (word_normalized, language)
+  where direction = 'zh-to-other';
+
+create unique index if not exists dictionary_cache_rev_unique
+  on public.dictionary_cache (word_normalized)
+  where direction = 'other-to-zh';
+
+create index if not exists dictionary_cache_recent_idx
+  on public.dictionary_cache (created_at desc);
+
+alter table public.dictionary_cache enable row level security;
+
+-- Drop & recreate cache policies idempotently.
+do $$
+declare r record;
+begin
+  for r in
+    select policyname from pg_policies
+    where schemaname = 'public' and tablename = 'dictionary_cache'
+  loop
+    execute format('drop policy if exists %I on public.dictionary_cache', r.policyname);
+  end loop;
+end $$;
+
+-- Open SELECT + INSERT for everyone (anon + authed) — this is the
+-- whole point of a shared cache.  No PII; rows are pure
+-- translation payloads.  UPDATE allowed only to bump hits_count
+-- (controlled at the edge function, not via direct client writes).
+create policy dictionary_cache_select_all on public.dictionary_cache
+  for select using (true);
+
+create policy dictionary_cache_insert_all on public.dictionary_cache
+  for insert with check (true);
+
+create policy dictionary_cache_update_all on public.dictionary_cache
+  for update using (true) with check (true);
