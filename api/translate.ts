@@ -866,16 +866,20 @@ export default async function handler(req: Request): Promise<Response> {
     // above every character.  See normalizeSyllables() for details.
     result = normalizeResponse(result);
 
-    // Write the AI result into the global cache, fire-and-forget.
-    // Failures are logged but never propagate to the user — a missed
-    // cache write only means the next caller pays the AI cost again.
-    // We use the language *from the response* when writing for
-    // forward direction (the AI might canonicalize "english" → "English"
-    // — but our cache key is lowercased so it doesn't matter).
-    storeCache(direction, word, language, result).catch((e) => {
+    // Write the AI result into the global cache.  IMPORTANT: must
+    // await — Vercel Edge Functions terminate pending Promises the
+    // moment the handler returns a Response, so a fire-and-forget
+    // `storeCache(...).catch(...)` would never actually flush.
+    // The added latency is ~50–150 ms (one PostgREST INSERT) on a
+    // path that already took 4+ seconds for the AI call, so it's
+    // imperceptible to the user.  Errors are caught here so a cache
+    // outage never breaks the actual response.
+    try {
+      await storeCache(direction, word, language, result);
+    } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[cache] post-AI write rejected:', e);
-    });
+    }
 
     return json({ ...result, _fromCache: false } as ApiResponse, 200);
   } catch (err) {
