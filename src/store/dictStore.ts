@@ -137,6 +137,167 @@ function dateKey(ts: number): string {
  * as anonymous so `query()` can proceed against /api/translate
  * without a Bearer token instead of leaving the spinner stuck.
  */
+/* ───────────────────── Library cache helpers ─────────────────────
+ * Same word + same language + same direction → reuse the existing
+ * entry instead of paying for another AI call.  Saves Gemini quota
+ * and gives an instant result for repeats.
+ *
+ * Cache scope:
+ *   • Signed-in user → search the cloud-mirrored `entries` map.
+ *     A hit is just a different filter on data already in memory.
+ *   • Anonymous user → search the device-local `anonCache` map
+ *     (persisted via zustand-persist to localStorage).
+ *
+ * Match rules:
+ *   • word: case-insensitive after trim (Chinese is unaffected;
+ *     latin input from reverse-mode benefits).
+ *   • direction: must match exactly.
+ *   • language: matches exactly for forward direction (it's the
+ *     user-selected target).  For reverse direction the language is
+ *     auto-detected by AI, so we don't have it pre-call — match on
+ *     word + direction only and let whichever language was first
+ *     stored win.
+ * ────────────────────────────────────────────────────────────── */
+
+const MAX_ANON_CACHE_ENTRIES = 200;
+
+function normalizeWord(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+function entryMatches(
+  e: DictionaryEntry,
+  word: string,
+  language: string,
+  direction: TranslationDirection,
+): boolean {
+  const eDir: TranslationDirection = e.direction ?? 'zh-to-other';
+  if (eDir !== direction) return false;
+  if (normalizeWord(e.word) !== normalizeWord(word)) return false;
+  if (direction === 'zh-to-other') {
+    if ((e.language ?? '').trim().toLowerCase() !== language.trim().toLowerCase()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function findCachedEntry(
+  map: Record<string, DictionaryEntry>,
+  word: string,
+  language: string,
+  direction: TranslationDirection,
+): DictionaryEntry | null {
+  for (const e of Object.values(map)) {
+    if (entryMatches(e, word, language, direction)) return e;
+  }
+  return null;
+}
+
+/** Add to anon cache; evict the oldest by queriedAt if over limit. */
+function addToAnonCache(
+  cache: Record<string, DictionaryEntry>,
+  entry: DictionaryEntry,
+): Record<string, DictionaryEntry> {
+  const updated: Record<string, DictionaryEntry> = { ...cache, [entry.id]: entry };
+  const ids = Object.keys(updated);
+  if (ids.length <= MAX_ANON_CACHE_ENTRIES) return updated;
+  const sortedByAge = Object.values(updated).sort((a, b) => a.queriedAt - b.queriedAt);
+  const toEvict = sortedByAge.slice(0, ids.length - MAX_ANON_CACHE_ENTRIES);
+  for (const e of toEvict) delete updated[e.id];
+  return updated;
+}
+
+/**
+ * Cloud cache hit: the user re-queried a word that already lives in
+ * their library.  No AI call, no new entries row — but we still want
+ * the lookup to count as part of today's session group and the active
+ * manual class (so the user can export this query along with everything
+ * else they did during that class).
+ *
+ * Idempotent: if the entry is already linked to a session we don't
+ * insert a duplicate row.
+ */
+async function applyCloudCacheHit(opts: {
+  cached: DictionaryEntry;
+  userId: string;
+  currentManagedStudentId: string | null;
+  sessions: ClassSession[];
+  activeManualSessionId: string | null;
+  setStore: (
+    s:
+      | Partial<DictState>
+      | ((state: DictState) => Partial<DictState>),
+  ) => void;
+}): Promise<void> {
+  const {
+    cached,
+    userId,
+    currentManagedStudentId,
+    sessions,
+    activeManualSessionId,
+    setStore,
+  } = opts;
+
+  let updatedSessions = sessions.slice();
+
+  // Find or create today's auto session (same logic as miss path).
+  const todayKey = dateKey(Date.now());
+  let autoSession = updatedSessions.find(
+    (s) => s.kind === 'auto' && s.name === todayKey,
+  );
+  if (!autoSession) {
+    const { data: sessRow, error: sessErr } = await supabase
+      .from('class_sessions')
+      .insert({
+        owner_user_id: userId,
+        managed_student_id: currentManagedStudentId,
+        name: todayKey,
+        kind: 'auto',
+      })
+      .select()
+      .single();
+    if (sessErr) throw sessErr;
+    autoSession = sessionFromRow(sessRow as SessionRow, []);
+    updatedSessions = [autoSession, ...updatedSessions];
+  }
+
+  // Pick the sessions that *would* receive a new link (skip ones
+  // that already have this entry — duplicate inserts violate the
+  // session_entries primary key).
+  const targetSessions: ClassSession[] = [];
+  if (!autoSession.entryIds.includes(cached.id)) targetSessions.push(autoSession);
+  if (
+    activeManualSessionId &&
+    activeManualSessionId !== autoSession.id
+  ) {
+    const manual = updatedSessions.find((s) => s.id === activeManualSessionId);
+    if (manual && !manual.entryIds.includes(cached.id)) targetSessions.push(manual);
+  }
+
+  if (targetSessions.length > 0) {
+    const links: SessionEntryRow[] = targetSessions.map((s) => ({
+      session_id: s.id,
+      entry_id: cached.id,
+    }));
+    const { error: linkErr } = await supabase.from('session_entries').insert(links);
+    if (linkErr) throw linkErr;
+    // Mirror locally.
+    const linkedIds = new Set(targetSessions.map((s) => s.id));
+    updatedSessions = updatedSessions.map((s) =>
+      linkedIds.has(s.id) ? { ...s, entryIds: [...s.entryIds, cached.id] } : s,
+    );
+  }
+
+  setStore({
+    sessions: updatedSessions,
+    latestEntryId: cached.id,
+    latestFromCache: true,
+    loading: false,
+    error: null,
+  });
+}
+
 async function getCurrentUserId(): Promise<string | null> {
   const data = await withTimeout(
     supabase.auth.getSession().then((r) => r.data),
@@ -205,8 +366,24 @@ interface DictState {
   /** True once hydrate() has finished (UI shows skeleton while false). */
   hydrated: boolean;
 
+  /**
+   * Device-local cache for anonymous queries.  Keyed by entry.id.
+   * Survives reloads via zustand-persist, capped at
+   * MAX_ANON_CACHE_ENTRIES (oldest evicted by queriedAt).  Only
+   * populated when there is no signed-in user — signed-in users
+   * already have a server-mirrored library in `entries`.
+   */
+  anonCache: Record<string, DictionaryEntry>;
+
   /** Transient. */
   latestEntryId: string | null;
+  /**
+   * True when the most recent query() call resolved from cache (no
+   * AI round-trip).  Drives a small "·已缓存" badge on the result
+   * card so the user can see they saved tokens.  Reset on the next
+   * query, on delete, and on `clearLatest`.
+   */
+  latestFromCache: boolean;
   loading: boolean;
   error: string | null;
 
@@ -265,7 +442,9 @@ export const useDictStore = create<DictState>()(
       currentManagedStudentId: null,
       managedStudents: [],
       hydrated: false,
+      anonCache: {},
       latestEntryId: null,
+      latestFromCache: false,
       loading: false,
       error: null,
 
@@ -402,12 +581,19 @@ export const useDictStore = create<DictState>()(
       },
 
       reset: () => {
+        // NB: anonCache is NOT cleared on reset.  reset() runs when the
+        // user signs out — at that point the cloud-mirrored `entries`
+        // map should be wiped (it's another user's data, RLS-wise),
+        // but the device-local anon cache should keep working as a
+        // guest library.  signed-in entries live in `entries` and are
+        // separate from anonCache.
         set({
           entries: {},
           sessions: [],
           activeManualSessionId: null,
           managedStudents: [],
           latestEntryId: null,
+          latestFromCache: false,
           loading: false,
           error: null,
           hydrated: false,
@@ -631,11 +817,58 @@ export const useDictStore = create<DictState>()(
         // that throws below — auth lookup, network fetch, DB insert —
         // is now safely inside the try, so loading always gets cleared
         // in the catch.
-        set({ loading: true, error: null });
+        set({ loading: true, error: null, latestFromCache: false });
         try {
           const userId = await getCurrentUserId();
-          const { prefs, currentManagedStudentId, sessions, entries, activeManualSessionId } =
-            get();
+          const {
+            prefs,
+            currentManagedStudentId,
+            sessions,
+            entries,
+            anonCache,
+            activeManualSessionId,
+          } = get();
+
+          /* ─── Cache lookup (skip AI on hit) ──────────────────────
+           * For forward direction we know the target language up
+           * front so it's part of the match.  For reverse, language
+           * is auto-detected by AI; match on word + direction only.
+           * ────────────────────────────────────────────────────── */
+          const cache = userId ? entries : anonCache;
+          const cacheTargetLang =
+            direction === 'zh-to-other' ? prefs.language : '';
+          const cached = findCachedEntry(cache, word, cacheTargetLang, direction);
+
+          if (cached && !userId) {
+            // Anon cache hit — surface the cached entry, no AI call.
+            set({
+              entries: { [cached.id]: cached },
+              latestEntryId: cached.id,
+              latestFromCache: true,
+              loading: false,
+              error: null,
+            });
+            return;
+          }
+
+          if (cached && userId) {
+            // Signed-in cache hit — make sure the entry is also linked
+            // to today's auto session and the active manual class
+            // (if any), so re-querying a known word during a class
+            // still includes it in that class's export.  Other than
+            // that, no AI call and no new entries row.
+            await applyCloudCacheHit({
+              cached,
+              userId,
+              currentManagedStudentId,
+              sessions,
+              activeManualSessionId,
+              setStore: set,
+            });
+            return;
+          }
+
+          /* ─── Cache miss — call the AI ───────────────────────── */
           const data = await translateWord(word, prefs.language, direction);
 
           const language =
@@ -644,13 +877,10 @@ export const useDictStore = create<DictState>()(
               : data.language?.trim() || 'auto';
 
           // ── Anonymous path ─────────────────────────────────────────
-          // No signed-in user → skip Supabase entirely.  Hold the
-          // result in memory so SearchView can render it via
-          // latestEntryId, and let it be replaced on the next query.
-          // We don't accumulate history because anon users have no
-          // place to view it (HistoryView shows a sign-in CTA), and
-          // pretending to keep history would be misleading — refresh
-          // wipes everything.
+          // Add to the persistent anon cache so future re-queries hit.
+          // The current entries map only ever holds the latest one
+          // (HistoryView is sign-in only — anon users see only the
+          // most recent result), but anonCache keeps the full library.
           if (!userId) {
             const id =
               (typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -667,7 +897,9 @@ export const useDictStore = create<DictState>()(
             };
             set({
               entries: { [id]: anonEntry },
+              anonCache: addToAnonCache(anonCache, anonEntry),
               latestEntryId: id,
+              latestFromCache: false,
               loading: false,
               error: null,
             });
@@ -745,6 +977,7 @@ export const useDictStore = create<DictState>()(
             entries: { ...entries, [newEntry.id]: newEntry },
             sessions: updatedSessions,
             latestEntryId: newEntry.id,
+            latestFromCache: false,
             loading: false,
             error: null,
           });
@@ -756,7 +989,8 @@ export const useDictStore = create<DictState>()(
         }
       },
 
-      clearLatest: () => set({ latestEntryId: null, error: null }),
+      clearLatest: () =>
+        set({ latestEntryId: null, latestFromCache: false, error: null }),
 
       deleteEntry: async (entryId) => {
         const state = get();
@@ -769,11 +1003,17 @@ export const useDictStore = create<DictState>()(
           ...s,
           entryIds: s.entryIds.filter((id) => id !== entryId),
         }));
+        // Also drop the entry from the anon cache so the user doesn't
+        // immediately get it back from cache on the next query.
+        const { [entryId]: _alsoFromCache, ...restAnonCache } = state.anonCache;
         set({
           entries: restEntries,
           sessions: newSessions,
+          anonCache: restAnonCache,
           latestEntryId:
             state.latestEntryId === entryId ? null : state.latestEntryId,
+          latestFromCache:
+            state.latestEntryId === entryId ? false : state.latestFromCache,
         });
 
         // FK cascades clean up session_entries.
@@ -785,6 +1025,7 @@ export const useDictStore = create<DictState>()(
           set({
             entries: { ...restEntries, [entryId]: exists },
             sessions: state.sessions,
+            anonCache: state.anonCache,
             error: error.message,
           });
         }
@@ -949,6 +1190,11 @@ export const useDictStore = create<DictState>()(
       partialize: (s) => ({
         prefs: s.prefs,
         currentManagedStudentId: s.currentManagedStudentId,
+        // anonCache lives here so guests get a real device-local
+        // library that survives reloads.  Capped at
+        // MAX_ANON_CACHE_ENTRIES (~200) so the localStorage payload
+        // stays well under a megabyte.
+        anonCache: s.anonCache,
       }),
       merge: (persistedState, currentState) => {
         const p = persistedState as Partial<DictState> | undefined;
@@ -956,6 +1202,7 @@ export const useDictStore = create<DictState>()(
           ...currentState,
           prefs: { ...currentState.prefs, ...(p?.prefs ?? {}) },
           currentManagedStudentId: p?.currentManagedStudentId ?? null,
+          anonCache: p?.anonCache ?? {},
         };
       },
     },

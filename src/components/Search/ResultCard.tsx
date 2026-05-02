@@ -30,6 +30,12 @@ interface Props {
 export function ResultCard({ entry, onClose }: Props) {
   const showPinyin = useDictStore((s) => s.prefs.showPinyin);
   const deleteEntry = useDictStore((s) => s.deleteEntry);
+  // True when the most recent query() resolved from the library cache
+  // instead of calling the AI.  Surfacing this saves the user a "wait,
+  // why was that instant?" moment and signals "we just saved you tokens".
+  const fromCache = useDictStore(
+    (s) => s.latestFromCache && s.latestEntryId === entry.id,
+  );
   const { t } = useT();
 
   const isReverse = entry.direction === 'other-to-zh';
@@ -37,6 +43,15 @@ export function ResultCard({ entry, onClose }: Props) {
 
   return (
     <div className="fade-in bg-white rounded-xl shadow-sm border border-stone-200 p-6 relative">
+      {fromCache && (
+        <span
+          className="absolute top-3 left-3 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+          title={t('cacheHitTooltip')}
+        >
+          <span aria-hidden="true">⚡</span>
+          {t('cacheHitBadge')}
+        </span>
+      )}
       <button
         onClick={() => {
           deleteEntry(entry.id);

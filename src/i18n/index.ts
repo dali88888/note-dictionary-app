@@ -60,6 +60,10 @@ const DICT = {
 
     translatedToLine: (v: Vars) => `翻译至 ${v.lang} · ${v.n} 个义项`,
     sentenceTranslatedTo: (v: Vars) => `整句翻译 · ${v.lang}`,
+    /* Cache-hit indicator on the result card */
+    cacheHitBadge: '已缓存',
+    cacheHitTooltip:
+      '该词条已在你的词库里，本次直接复用——未消耗 AI 配额、即刻返回。',
     chineseCandidatesLine: (v: Vars) => `从 ${v.lang} 译为中文 · ${v.n} 个候选词`,
     chineseCandidatesLineSingle: (v: Vars) => `从 ${v.lang} 译为中文`,
     usageNote: '用法说明',
@@ -262,6 +266,10 @@ const DICT = {
     translatedToLine: (v: Vars) =>
       `Translated to ${v.lang} · ${v.n} meaning${Number(v.n) === 1 ? '' : 's'}`,
     sentenceTranslatedTo: (v: Vars) => `Sentence translation · ${v.lang}`,
+    /* Cache-hit indicator on the result card */
+    cacheHitBadge: 'Cached',
+    cacheHitTooltip:
+      'This entry is already in your library; reused instantly with no AI quota spent.',
     chineseCandidatesLine: (v: Vars) =>
       `${v.lang} → Chinese · ${v.n} candidate${Number(v.n) === 1 ? '' : 's'}`,
     chineseCandidatesLineSingle: (v: Vars) => `${v.lang} → Chinese`,
