@@ -221,25 +221,27 @@ function addToAnonCache(
 async function applyCloudCacheHit(opts: {
   cached: DictionaryEntry;
   userId: string;
-  currentManagedStudentId: string | null;
-  sessions: ClassSession[];
-  activeManualSessionId: string | null;
+  // The store's getState — used at the BOTTOM of this function to read
+  // the freshest sessions / managed-student context, instead of trusting
+  // a snapshot captured at the top.  See `mergeSessionsAfterQuery` and
+  // the comment in query() for why this matters: a parallel hydrate()
+  // can rewrite `sessions` between our read and our write.
+  getState: () => DictState;
   setStore: (
     s:
       | Partial<DictState>
       | ((state: DictState) => Partial<DictState>),
   ) => void;
 }): Promise<void> {
-  const {
-    cached,
-    userId,
-    currentManagedStudentId,
-    sessions,
-    activeManualSessionId,
-    setStore,
-  } = opts;
+  const { cached, userId, getState, setStore } = opts;
 
-  let updatedSessions = sessions.slice();
+  // Read CURRENT state so the linking decisions reflect any student
+  // switch / class-session change that happened while the L1 lookup
+  // was being decided.
+  const fresh0 = getState();
+  const currentManagedStudentId = fresh0.currentManagedStudentId;
+  const activeManualSessionId = fresh0.activeManualSessionId;
+  let updatedSessions = fresh0.sessions.slice();
 
   // Find or create today's auto session (same logic as miss path).
   const todayKey = dateKey(Date.now());
@@ -289,13 +291,50 @@ async function applyCloudCacheHit(opts: {
     );
   }
 
-  setStore({
-    sessions: updatedSessions,
+  setStore((state) => ({
+    sessions: mergeSessionsAfterQuery(state.sessions, updatedSessions),
     latestEntryId: cached.id,
     latestFromCache: true,
     loading: false,
     error: null,
-  });
+  }));
+}
+
+/**
+ * Reconcile sessions after a query() insert.
+ *
+ * `updated` is the slice we computed from a stale snapshot at query
+ * time (with our newly-inserted entry linked into the relevant
+ * session.entryIds).  `current` is the latest in-memory state, which
+ * might have been refreshed by a hydrate() that ran in parallel
+ * (e.g. while the AI was thinking) and contains sessions / entry
+ * links we didn't know about.
+ *
+ * We want: every session our snapshot touched (kind=auto for today,
+ * possibly the active manual) carries our new entry id, even after
+ * accounting for whatever hydrate loaded.
+ *
+ * Strategy: index `updated` by id, then walk `current` and replace any
+ * session that exists in both.  Any sessions only in `updated` (the
+ * just-created today's-auto case) get prepended.  This way concurrent
+ * hydrate inserts of OTHER sessions are preserved.
+ */
+function mergeSessionsAfterQuery(
+  current: ClassSession[],
+  updated: ClassSession[],
+): ClassSession[] {
+  const updatedById = new Map(updated.map((s) => [s.id, s]));
+  const currentIds = new Set(current.map((s) => s.id));
+  const merged = current.map((s) => updatedById.get(s.id) ?? s);
+  // Anything in `updated` that wasn't in `current` (e.g. a brand-new
+  // auto session we just created during query()): prepend so it
+  // surfaces at the top, matching the auto-session ordering.
+  for (const s of updated) {
+    if (!currentIds.has(s.id)) {
+      merged.unshift(s);
+    }
+  }
+  return merged;
 }
 
 async function getCurrentUserId(): Promise<string | null> {
@@ -820,14 +859,14 @@ export const useDictStore = create<DictState>()(
         set({ loading: true, error: null, latestFromCache: false });
         try {
           const userId = await getCurrentUserId();
-          const {
-            prefs,
-            currentManagedStudentId,
-            sessions,
-            entries,
-            anonCache,
-            activeManualSessionId,
-          } = get();
+          // Snapshot only the fields safe to read once at the top:
+          // prefs (rarely changed, fine), entries (read-only L1 cache
+          // lookup), anonCache (same).  Anything mutable across the
+          // AI call (currentManagedStudentId / sessions /
+          // activeManualSessionId) is RE-READ below right before the
+          // insert, so a student-folder switch during the AI wait
+          // doesn't tag entries to the wrong student.
+          const { prefs, entries, anonCache } = get();
 
           /* ─── Cache lookup (skip AI on hit) ──────────────────────
            * For forward direction we know the target language up
@@ -860,9 +899,9 @@ export const useDictStore = create<DictState>()(
             await applyCloudCacheHit({
               cached,
               userId,
-              currentManagedStudentId,
-              sessions,
-              activeManualSessionId,
+              // Pass live store accessors so cache-hit re-linking uses
+              // the current student context, not the stale snapshot.
+              getState: get,
               setStore: set,
             });
             return;
@@ -914,12 +953,26 @@ export const useDictStore = create<DictState>()(
           }
 
           // ── Signed-in path: persist to Supabase ────────────────────
+          //
+          // Re-read the LATEST currentManagedStudentId / activeManualSessionId
+          // here, NOT the snapshot taken at the top of query().  The AI
+          // call between the snapshot and this point can take 5–15 s,
+          // and during that time the user may have switched student
+          // folders or started/ended a manual class.  Using the snapshot
+          // would tag the new entry to whichever folder was active when
+          // the user clicked search, NOT where they ended up — that's
+          // the "我的词条没收录到该学生" bug user reported.
+          const fresh = get();
+          const targetManagedStudentId = fresh.currentManagedStudentId;
+          const targetActiveManualId = fresh.activeManualSessionId;
+          const targetSessions = fresh.sessions;
+
           // 1. Insert the entry.  DB fills id + queried_at.
           const { data: entryRow, error: entryErr } = await supabase
             .from('entries')
             .insert({
               owner_user_id: userId,
-              managed_student_id: currentManagedStudentId,
+              managed_student_id: targetManagedStudentId,
               word: data.word,
               direction,
               language,
@@ -930,19 +983,23 @@ export const useDictStore = create<DictState>()(
             .single();
           if (entryErr) throw entryErr;
           const newEntry = entryFromRow(entryRow as EntryRow);
+          // eslint-disable-next-line no-console
+          console.log(
+            `[dictStore] inserted entry ${newEntry.id} word="${newEntry.word}" managed_student_id=${targetManagedStudentId ?? 'null(self)'}`,
+          );
 
-          // 2. Find or create today's auto session.
+          // 2. Find or create today's auto session in the LATEST sessions.
           const todayKey = dateKey(newEntry.queriedAt);
-          let autoSession = sessions.find(
+          let autoSession = targetSessions.find(
             (s) => s.kind === 'auto' && s.name === todayKey,
           );
-          let updatedSessions = sessions.slice();
+          let updatedSessions = targetSessions.slice();
           if (!autoSession) {
             const { data: sessRow, error: sessErr } = await supabase
               .from('class_sessions')
               .insert({
                 owner_user_id: userId,
-                managed_student_id: currentManagedStudentId,
+                managed_student_id: targetManagedStudentId,
                 name: todayKey,
                 kind: 'auto',
               })
@@ -958,12 +1015,12 @@ export const useDictStore = create<DictState>()(
             { session_id: autoSession.id, entry_id: newEntry.id },
           ];
           if (
-            activeManualSessionId &&
-            activeManualSessionId !== autoSession.id &&
-            updatedSessions.some((s) => s.id === activeManualSessionId)
+            targetActiveManualId &&
+            targetActiveManualId !== autoSession.id &&
+            updatedSessions.some((s) => s.id === targetActiveManualId)
           ) {
             linksToInsert.push({
-              session_id: activeManualSessionId,
+              session_id: targetActiveManualId,
               entry_id: newEntry.id,
             });
           }
@@ -972,7 +1029,11 @@ export const useDictStore = create<DictState>()(
             .insert(linksToInsert);
           if (linkErr) throw linkErr;
 
-          // 4. Mirror locally.
+          // 4. Mirror locally — use the FRESHEST `entries` map at the
+          // moment of write via the functional setter.  Otherwise a
+          // background hydrate (e.g. one that was triggered by a student
+          // switch during the AI call) could land between our snapshot
+          // and this set, and we'd clobber its entries with our stale copy.
           const linkedSessionIds = new Set(linksToInsert.map((l) => l.session_id));
           updatedSessions = updatedSessions.map((s) =>
             linkedSessionIds.has(s.id)
@@ -980,19 +1041,17 @@ export const useDictStore = create<DictState>()(
               : s,
           );
 
-          set({
-            entries: { ...entries, [newEntry.id]: newEntry },
-            sessions: updatedSessions,
+          set((state) => ({
+            entries: { ...state.entries, [newEntry.id]: newEntry },
+            // Merge our updated sessions back over fresh state — but
+            // keep any sessions that arrived via hydrate that we didn't
+            // know about.  Build a map for this.
+            sessions: mergeSessionsAfterQuery(state.sessions, updatedSessions),
             latestEntryId: newEntry.id,
-            // Signed-in user got the result from the global cache (a
-            // different user's earlier query paid the AI cost).  We
-            // still create our own entries row above so the lookup
-            // appears in this user's personal library and class
-            // sessions, but we credit the badge to the cache.
             latestFromCache: serverCacheHit,
             loading: false,
             error: null,
-          });
+          }));
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           // eslint-disable-next-line no-console

@@ -43,15 +43,6 @@ export function ResultCard({ entry, onClose }: Props) {
 
   return (
     <div className="fade-in bg-white rounded-xl shadow-sm border border-stone-200 p-6 relative">
-      {fromCache && (
-        <span
-          className="absolute top-3 left-3 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
-          title={t('cacheHitTooltip')}
-        >
-          <span aria-hidden="true">⚡</span>
-          {t('cacheHitBadge')}
-        </span>
-      )}
       <button
         onClick={() => {
           deleteEntry(entry.id);
@@ -63,10 +54,16 @@ export function ResultCard({ entry, onClose }: Props) {
         ×
       </button>
 
+      {/* The "已缓存" badge used to sit in the top-left of the card with
+          absolute positioning, but on Chinese characters the pinyin row
+          renders flush with the top edge of ChineseLine and was getting
+          covered.  Passing the flag down so the header can splice the
+          badge into its subtitle line keeps it visible without
+          overlapping content. */}
       {isReverse ? (
-        <ReverseHeader entry={entry} />
+        <ReverseHeader entry={entry} fromCache={fromCache} />
       ) : (
-        <ForwardHeader entry={entry} showPinyin={showPinyin} />
+        <ForwardHeader entry={entry} showPinyin={showPinyin} fromCache={fromCache} />
       )}
 
       <ol className="space-y-5">
@@ -112,19 +109,24 @@ function isSentenceMode(entry: DictionaryEntry): boolean {
 function ForwardHeader({
   entry,
   showPinyin,
+  fromCache,
 }: {
   entry: DictionaryEntry;
   showPinyin: boolean;
+  fromCache: boolean;
 }) {
   const { t } = useT();
   const sentence = isSentenceMode(entry);
   return (
     <div className="mb-5">
       <ChineseLine syllables={entry.wordSyllables} showPinyin={showPinyin} size="xl" />
-      <div className="mt-2 text-sm text-stone-500">
-        {sentence
-          ? t('sentenceTranslatedTo', { lang: entry.language })
-          : t('translatedToLine', { lang: entry.language, n: entry.meanings.length })}
+      <div className="mt-2 text-sm text-stone-500 flex items-center gap-2 flex-wrap">
+        <span>
+          {sentence
+            ? t('sentenceTranslatedTo', { lang: entry.language })
+            : t('translatedToLine', { lang: entry.language, n: entry.meanings.length })}
+        </span>
+        {fromCache && <CacheBadge />}
       </div>
     </div>
   );
@@ -190,7 +192,13 @@ function ForwardMeaningBody({
 
 /* ─── Reverse (other → zh) ──────────────────────────────────── */
 
-function ReverseHeader({ entry }: { entry: DictionaryEntry }) {
+function ReverseHeader({
+  entry,
+  fromCache,
+}: {
+  entry: DictionaryEntry;
+  fromCache: boolean;
+}) {
   const { t } = useT();
   const n = entry.meanings.length;
   return (
@@ -198,12 +206,35 @@ function ReverseHeader({ entry }: { entry: DictionaryEntry }) {
       <h2 className="text-2xl text-stone-900 font-semibold leading-snug break-words">
         {entry.word}
       </h2>
-      <div className="mt-2 text-sm text-stone-500">
-        {n > 1
-          ? t('chineseCandidatesLine', { lang: entry.language, n })
-          : t('chineseCandidatesLineSingle', { lang: entry.language })}
+      <div className="mt-2 text-sm text-stone-500 flex items-center gap-2 flex-wrap">
+        <span>
+          {n > 1
+            ? t('chineseCandidatesLine', { lang: entry.language, n })
+            : t('chineseCandidatesLineSingle', { lang: entry.language })}
+        </span>
+        {fromCache && <CacheBadge />}
       </div>
     </div>
+  );
+}
+
+/**
+ * Inline "⚡ 已缓存" pill, rendered alongside the result-card subtitle
+ * (e.g. "翻译至 English · 3 个义项 ⚡ 已缓存").  Used to live as an
+ * absolutely-positioned overlay in the top-left, but that occluded
+ * the pinyin row of the queried word — inline placement keeps it
+ * visible without overlapping content.
+ */
+function CacheBadge() {
+  const { t } = useT();
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 leading-none"
+      title={t('cacheHitTooltip')}
+    >
+      <span aria-hidden="true">⚡</span>
+      {t('cacheHitBadge')}
+    </span>
   );
 }
 
