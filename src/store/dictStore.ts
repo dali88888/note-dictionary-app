@@ -337,7 +337,67 @@ function mergeSessionsAfterQuery(
   return merged;
 }
 
+/**
+ * Read the signed-in user id directly from localStorage, the way
+ * Supabase persists it.  Returns null if no token is stored.
+ *
+ * Why this exists:  the previous implementation called
+ * `supabase.auth.getSession()` with a 3 s `withTimeout` fallback
+ * to `null`.  That works in steady state, but under lock
+ * contention (which we already have ample reports of with the
+ * navigator-locks/auto-refresh races) `getSession()` can stall
+ * past the 3 s budget — at which point the fallback fires and
+ * we return null, and `query()` THINKS THE USER IS ANONYMOUS.
+ * The query then takes the anon path, which:
+ *   • doesn't INSERT into the cloud `entries` table
+ *   • REPLACES the in-memory entries map with just the new entry
+ * So a signed-in teacher who switches to a fresh student folder
+ * (which triggers hydrate + token refresh in parallel, peak lock
+ * pressure) and immediately queries gets exactly the symptom the
+ * user reported: queries don't save, and "全部查询" only ever
+ * shows the latest one.
+ *
+ * localStorage reads are synchronous and never hang.  Supabase
+ * writes the session there atomically on signin/signout, so it's
+ * an authoritative source.  The SDK might lag behind on token
+ * refresh, but the *user identity* is stable across that —
+ * which is all we need to decide "anon vs cloud path".
+ *
+ * Async signature kept for compatibility with all the existing
+ * `await getCurrentUserId()` call sites.
+ */
+function getStoredUserIdSync(): string | null {
+  try {
+    const url = import.meta.env.VITE_SUPABASE_URL;
+    if (!url) return null;
+    // Supabase storage key is `sb-<project-ref>-auth-token`.
+    const ref = url.match(/https?:\/\/([^.]+)\./)?.[1];
+    if (!ref) return null;
+    const raw = localStorage.getItem(`sb-${ref}-auth-token`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as
+      | { user?: { id?: string } | null; access_token?: string; refresh_token?: string }
+      | null;
+    if (!parsed) return null;
+    // Treat empty / signed-out shape as anonymous.
+    if (!parsed.access_token || !parsed.refresh_token) return null;
+    const id = parsed.user?.id;
+    return typeof id === 'string' && id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 async function getCurrentUserId(): Promise<string | null> {
+  // Fast path: localStorage read.  Sync, can't hang, can't be
+  // misclassified by a lock-contended SDK call.
+  const stored = getStoredUserIdSync();
+  if (stored) return stored;
+
+  // Fallback: ask the SDK.  Covers edge cases where the user just
+  // signed in and the storage write hasn't settled yet, or where
+  // localStorage is unavailable (private mode etc.).  Keep the
+  // 3 s timeout so we still degrade to anon if the SDK is wedged.
   const data = await withTimeout(
     supabase.auth.getSession().then((r) => r.data),
     3000,

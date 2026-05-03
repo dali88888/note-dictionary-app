@@ -517,47 +517,91 @@ async function verifyAuth(req: Request): Promise<AuthOk | AuthFail> {
  * ─────────────────────────────────────────────────────────────── */
 
 const HAN_RE = /[㐀-鿿豈-﫿]/;
-// Tone-marked vowels (the nucleus of a Mandarin pinyin syllable always
-// carries exactly one tone mark — that's how we find syllable boundaries).
-const TONE_VOWEL = /[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/i;
-// Consonants that can start a Mandarin pinyin syllable.  `ng` boundaries
-// are handled implicitly because if cur ends with `n` or `ng`, those are
-// final consonants; the next consonant after a tone vowel is always a
-// new syllable's initial.
-const PINYIN_INITIAL = /[bpmfdtnlgkhjqxzcsrwy]/i;
+// Any vowel — tone-marked or plain.  We use ALL vowels (not just
+// tone-marked) because Gemini sometimes drops tone marks despite the
+// prompt, and we still need to split correctly: "wancheng" must
+// yield ["wan","cheng"], not ["wancheng"] (the user-visible bug
+// where the entire pinyin gets stuck above 完 with nothing on 成).
+const VOWEL_RE = /[aeiouüāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/i;
 
 /**
- * Split a continuous (no-space) pinyin string like "péngyǒu" or
- * "zhōngguórén" into per-syllable chunks ["péng","yǒu"] /
- * ["zhōng","guó","rén"] using tone-mark boundaries.
+ * Split a continuous (no-space) pinyin string into per-syllable chunks.
  *
- * Heuristic: each pinyin syllable contains exactly one tone-marked
- * vowel.  After a tone vowel, the first consonant we see is the
- * initial of the next syllable — split there.
+ * Examples:
+ *   "gōngzuò"     → ["gōng", "zuò"]      (correctly absorbs 'ng' final)
+ *   "péngyǒu"     → ["péng", "yǒu"]
+ *   "zhōngguórén" → ["zhōng", "guó", "rén"]
+ *   "wancheng"    → ["wan", "cheng"]     (works on no-tone input too)
+ *   "shēngrì"     → ["shēng", "rì"]      ('r' as initial of next syl)
+ *   "huār"        → ["huār"]             ('r' as erhua final)
  *
- * Edge cases: "ng" ending followed by vowel (e.g. "fan'an") is
- * ambiguous in Chinese pinyin but very rare in textbook examples.
- * If the heuristic produces a syllable count that doesn't match the
- * caller's expectation, the caller falls back to "first char gets
- * the whole pinyin" rather than corrupt the data.
+ * Earlier version split on tone-mark boundaries only and produced
+ * ["gō", "ngzuò"] for "gōngzuò" (the 'n' after 'ō' was incorrectly
+ * treated as the next syllable's initial instead of the current
+ * syllable's '-ng' final), which surfaced as the user-visible bug
+ * "go    ngzuo" rendered above 工作 in example sentences.  The
+ * tone-only approach also failed entirely on no-tone input —
+ * "wancheng" returned a single chunk and the entire pinyin landed
+ * above 完 with nothing on 成.  This rewrite uses a proper greedy
+ * initial+vowel+final parser that handles both cases.
  */
 function splitContinuousPinyin(pinyin: string): string[] {
   const tokens: string[] = [];
-  let cur = '';
-  let sawTone = false;
-  for (const ch of pinyin) {
-    if (TONE_VOWEL.test(ch)) {
-      cur += ch;
-      sawTone = true;
-    } else if (sawTone && PINYIN_INITIAL.test(ch)) {
-      tokens.push(cur);
-      cur = ch;
-      sawTone = false;
+  const isVowel = (ch: string | undefined) => !!ch && VOWEL_RE.test(ch);
+  let i = 0;
+  const n = pinyin.length;
+  while (i < n) {
+    const start = i;
+
+    // Phase 1 — initial consonant cluster.  Skip any non-vowel run
+    // (covers 'b', digraphs like 'zh'/'ch'/'sh', and edge cases like
+    // a syllable that starts with no initial — 'a', 'e', 'o' just
+    // skip this phase immediately).
+    while (i < n && !isVowel(pinyin[i])) i++;
+
+    // Phase 2 — vowel cluster (medial + nucleus).  Greedily consume
+    // every vowel.  Handles diphthongs ('ai', 'ou', 'uo', 'iao') and
+    // tone-marked vowels uniformly.
+    while (i < n && isVowel(pinyin[i])) i++;
+
+    // Phase 3 — optional final 'n', 'ng', or 'r' (erhua).  The hard
+    // case is distinguishing "final + next syllable's vowel" from
+    // "final + next syllable's consonant".  Rule: a consonant after
+    // the vowel cluster is a final ONLY if the next char is also a
+    // consonant or end-of-string; if the next char is a vowel, the
+    // consonant starts the next syllable instead.  For 'ng',
+    // following Mandarin convention, prefer the 'ng-final' reading
+    // when ambiguous (no apostrophe to disambiguate).
+    if (i < n) {
+      const c = pinyin[i].toLowerCase();
+      if (c === 'n') {
+        if (isVowel(pinyin[i + 1])) {
+          // 'n' + vowel → 'n' is initial of next syllable.
+        } else {
+          i++;
+          if (i < n && pinyin[i].toLowerCase() === 'g') {
+            // 'g' could be 'ng' final's tail, OR the start of the
+            // next syllable's initial.  Greedy: take it as 'ng'.
+            i++;
+          }
+        }
+      } else if (c === 'r') {
+        if (!isVowel(pinyin[i + 1])) {
+          // Erhua final.
+          i++;
+        }
+      }
+    }
+
+    if (i > start) {
+      tokens.push(pinyin.slice(start, i));
     } else {
-      cur += ch;
+      // Defensive: input doesn't fit the model at all (e.g. all
+      // consonants).  Consume one char to avoid an infinite loop.
+      tokens.push(pinyin.slice(start, start + 1));
+      i = start + 1;
     }
   }
-  if (cur) tokens.push(cur);
   return tokens;
 }
 
@@ -581,6 +625,25 @@ function splitPinyin(pinyin: string): string[] {
  * is purely a corrective step — Gemini is told in the prompt to do
  * this itself, but we can't trust it 100%.
  */
+/**
+ * For a single Chinese character, the pinyin is by definition exactly
+ * one syllable.  AI sometimes inserts a stray space within it
+ * (observed: `{hanzi: "工", pinyin: "go ng"}` instead of `"gōng"`),
+ * which surfaces in the rendered ChineseLine as a visible internal
+ * gap above the character.  Strip whitespace from any
+ * single-Han-char Syllable's pinyin to repair this.
+ */
+function cleanSingleCharPinyin(syl: ApiSyllable): ApiSyllable {
+  const hanzi = typeof syl?.hanzi === 'string' ? syl.hanzi : '';
+  const pinyin = typeof syl?.pinyin === 'string' ? syl.pinyin : '';
+  const chars = [...hanzi];
+  const isSingleHan = chars.length === 1 && HAN_RE.test(chars[0]);
+  if (isSingleHan && /\s/.test(pinyin)) {
+    return { hanzi, pinyin: pinyin.replace(/\s+/g, '') };
+  }
+  return { hanzi, pinyin };
+}
+
 function normalizeSyllables(syllables: ApiSyllable[] | undefined | null): ApiSyllable[] {
   if (!Array.isArray(syllables)) return [];
   const out: ApiSyllable[] = [];
@@ -593,8 +656,10 @@ function normalizeSyllables(syllables: ApiSyllable[] | undefined | null): ApiSyl
     const hanCount = chars.filter((c) => HAN_RE.test(c)).length;
 
     if (hanCount <= 1) {
-      // Already single Han character (or pure punctuation) — pass through.
-      out.push({ hanzi, pinyin });
+      // Already single Han character (or pure punctuation) — pass
+      // through, but strip stray whitespace from a 1-char pinyin
+      // (Gemini occasionally hands us "go ng" for 工).
+      out.push(cleanSingleCharPinyin({ hanzi, pinyin }));
       continue;
     }
 
