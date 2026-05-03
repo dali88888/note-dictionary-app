@@ -18,6 +18,7 @@
  * worth a beat of friction.
  */
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDictStore } from '../../store/dictStore';
 import { useT } from '../../i18n/useT';
 import { Button } from '../UI/Button';
@@ -47,7 +48,19 @@ export function StudentManager({ onClose }: Props) {
     setBusy(false);
   };
 
-  return (
+  // Render the modal via a portal to <body> so its `position: fixed`
+  // is positioned against the viewport, NOT against any ancestor that
+  // happens to have `backdrop-filter` / `transform` / `filter` /
+  // `will-change` / `contain` set — any of those create a containing
+  // block for fixed descendants.  TopBar uses `backdrop-blur`, which
+  // is exactly such a property, and StudentManager renders inside
+  // TopBar's tree (via StudentSwitcher).  Without this portal the
+  // modal would be anchored to the ~50 px tall TopBar instead of the
+  // full viewport, and `flex items-center` would center it inside
+  // that tiny strip — placing the input field unreachably high above
+  // the rest of the page.  This is the bug the user reported as
+  // "input box appears too high, can't type".
+  const modal = (
     <div
       className="fixed inset-0 z-30 bg-black/40 flex items-center justify-center px-4 py-8"
       onClick={onClose}
@@ -73,6 +86,7 @@ export function StudentManager({ onClose }: Props) {
                 {t('addStudentLabel')}
               </label>
               <input
+                autoFocus
                 type="text"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -121,6 +135,8 @@ export function StudentManager({ onClose }: Props) {
       </div>
     </div>
   );
+
+  return createPortal(modal, document.body);
 }
 
 function StudentRow({
