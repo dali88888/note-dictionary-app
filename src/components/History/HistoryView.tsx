@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDictStore } from '../../store/dictStore';
 import type { ClassSession, DictionaryEntry, ExportOptions } from '../../types/dictionary';
 import { useT } from '../../i18n/useT';
@@ -6,6 +6,7 @@ import type { StringKey } from '../../i18n';
 import { Button } from '../UI/Button';
 import { Toggle } from '../UI/Toggle';
 import { ChineseLine } from '../Common/ChineseLine';
+import { ResultCard } from '../Search/ResultCard';
 import { exportToPptx } from '../../export/exportPptx';
 import { useAuth } from '../../auth/AuthContext';
 
@@ -74,6 +75,22 @@ export function HistoryView() {
     wordsPerSlide: 1,
     title: '',
   });
+
+  // Click-to-preview: clicking any history entry pops up the same
+  // ResultCard the user saw the first time they queried it — without
+  // re-running the AI or hitting the cache.  The entry payload is
+  // already in `entries`, so this is a pure local-state operation.
+  const [previewEntryId, setPreviewEntryId] = useState<string | null>(null);
+  const previewEntry = previewEntryId ? entries[previewEntryId] ?? null : null;
+  // ESC-to-close the preview modal so it feels like a normal dialog.
+  useEffect(() => {
+    if (!previewEntryId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreviewEntryId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [previewEntryId]);
 
   const allEntries = useMemo(
     () => Object.values(entries).sort((a, b) => b.queriedAt - a.queriedAt),
@@ -145,7 +162,12 @@ export function HistoryView() {
       <div className="grid grid-cols-1 md:grid-cols-[1fr_320px] gap-6">
         <div>
           {tab === 'all' && (
-            <AllEntriesList entries={allEntries} onDelete={deleteEntry} showPinyin={showPinyin} />
+            <AllEntriesList
+              entries={allEntries}
+              onDelete={deleteEntry}
+              onPreview={setPreviewEntryId}
+              showPinyin={showPinyin}
+            />
           )}
           {tab === 'date' && (
             <SessionGroupList
@@ -154,6 +176,7 @@ export function HistoryView() {
               selected={selectedSessionIds}
               onToggle={toggleSession}
               onDelete={(id) => deleteSession(id, false)}
+              onPreview={setPreviewEntryId}
               emptyText={t('emptyByDate')}
             />
           )}
@@ -164,6 +187,7 @@ export function HistoryView() {
               selected={selectedSessionIds}
               onToggle={toggleSession}
               onDelete={(id) => deleteSession(id, false)}
+              onPreview={setPreviewEntryId}
               emptyText={t('emptyByClass')}
             />
           )}
@@ -234,6 +258,36 @@ export function HistoryView() {
           )}
         </aside>
       </div>
+
+      {/* Click-to-preview modal.  Renders the full ResultCard for the
+          clicked entry, with hideDelete=true so the only × control is
+          on the modal frame (close, not delete — destructive deletion
+          stays explicit on the row's own "删除" button).  Backdrop
+          click + ESC also dismiss.  HistoryView lives in <main> as a
+          sibling of TopBar, not a descendant, so `fixed inset-0`
+          resolves against the viewport (no portal needed). */}
+      {previewEntry && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 flex items-start justify-center px-4 py-8 overflow-y-auto"
+          onClick={() => setPreviewEntryId(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-3xl"
+          >
+            <button
+              type="button"
+              onClick={() => setPreviewEntryId(null)}
+              aria-label={t('closeBtn')}
+              title={t('closeBtn')}
+              className="absolute -top-3 -right-3 z-10 w-9 h-9 rounded-full bg-white shadow-md border border-stone-200 text-stone-500 hover:bg-stone-100 hover:text-stone-700 text-lg leading-none flex items-center justify-center"
+            >
+              ×
+            </button>
+            <ResultCard entry={previewEntry} hideDelete />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -241,10 +295,12 @@ export function HistoryView() {
 function AllEntriesList({
   entries,
   onDelete,
+  onPreview,
   showPinyin,
 }: {
   entries: DictionaryEntry[];
   onDelete: (id: string) => void;
+  onPreview: (id: string) => void;
   showPinyin: boolean;
 }) {
   const { t } = useT();
@@ -259,7 +315,22 @@ function AllEntriesList({
         const isReverse = entry.direction === 'other-to-zh';
         const firstCandidate = isReverse ? entry.meanings[0]?.hanziSyllables : null;
         return (
-          <li key={entry.id} className="p-3 flex items-start gap-3">
+          <li
+            key={entry.id}
+            onClick={() => onPreview(entry.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onPreview(entry.id);
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            // Whole row is clickable; the explicit "删除" button below
+            // stops propagation so deleting doesn't also fire a preview.
+            className="p-3 flex items-start gap-3 cursor-pointer hover:bg-amber-50/50 focus:bg-amber-50/70 focus:outline-none transition-colors"
+            title={t('previewEntryHint')}
+          >
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span
@@ -304,7 +375,10 @@ function AllEntriesList({
               </p>
             </div>
             <button
-              onClick={() => onDelete(entry.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(entry.id);
+              }}
               className="text-stone-400 hover:text-red-600 text-xs px-2"
             >
               {t('delete')}
@@ -322,6 +396,7 @@ function SessionGroupList({
   selected,
   onToggle,
   onDelete,
+  onPreview,
   emptyText,
 }: {
   sessions: ClassSession[];
@@ -329,6 +404,7 @@ function SessionGroupList({
   selected: Set<string>;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
+  onPreview: (id: string) => void;
   emptyText: string;
 }) {
   const { t } = useT();
@@ -401,18 +477,27 @@ function SessionGroupList({
                         ?.map((s) => s.hanzi)
                         .join('') || e.word
                     : e.word;
+                  // Two distinct titles: when reverse mode, the chip
+                  // already truncates the original input, so the
+                  // tooltip shows the full input AND the preview hint.
+                  // Plain forward chips just get the preview hint.
+                  const chipTitle = isReverse
+                    ? `${e.word} · ${t('previewEntryHint')}`
+                    : t('previewEntryHint');
                   return (
-                    <span
+                    <button
                       key={e.id}
-                      className={`text-sm px-2 py-0.5 rounded ${
+                      type="button"
+                      onClick={() => onPreview(e.id)}
+                      className={`text-sm px-2 py-0.5 rounded transition-colors cursor-pointer ${
                         isReverse
-                          ? 'bg-violet-50 text-violet-700 border border-violet-200'
-                          : 'bg-stone-100 text-stone-700'
+                          ? 'bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100'
+                          : 'bg-stone-100 text-stone-700 hover:bg-amber-100'
                       }`}
-                      title={isReverse ? e.word : undefined}
+                      title={chipTitle}
                     >
                       {chipText}
-                    </span>
+                    </button>
                   );
                 })}
                 {entries.length > 20 && (

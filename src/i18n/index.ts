@@ -70,6 +70,9 @@ const DICT = {
     pronunciation: '读音：',
     example: '例句',
     deleteRecord: '删除此记录',
+    /* Tooltip on history rows / entry chips — clicking opens the
+       full ResultCard for that entry without re-running the AI. */
+    previewEntryHint: '点击查看完整释义',
 
     /* Register labels (other→zh) */
     registerCasual: '口语',
@@ -277,6 +280,9 @@ const DICT = {
     pronunciation: 'Pron.: ',
     example: 'Example',
     deleteRecord: 'Delete this record',
+    /* Tooltip on history rows / entry chips — clicking opens the
+       full ResultCard for that entry without re-running the AI. */
+    previewEntryHint: 'Click to view full definition',
 
     /* Register labels (other→zh) */
     registerCasual: 'casual',

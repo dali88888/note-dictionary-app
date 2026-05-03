@@ -25,9 +25,16 @@ const REGISTER_COLOR: Record<Register, string> = {
 interface Props {
   entry: DictionaryEntry;
   onClose?: () => void;
+  /**
+   * Hide the built-in × delete button.  Set to true when the card is
+   * being rendered inside a context that owns its own close affordance
+   * — e.g. the History preview modal, where × should dismiss the
+   * preview rather than delete the entry from the user's library.
+   */
+  hideDelete?: boolean;
 }
 
-export function ResultCard({ entry, onClose }: Props) {
+export function ResultCard({ entry, onClose, hideDelete = false }: Props) {
   const showPinyin = useDictStore((s) => s.prefs.showPinyin);
   const deleteEntry = useDictStore((s) => s.deleteEntry);
   // True when the most recent query() resolved from the library cache
@@ -43,16 +50,18 @@ export function ResultCard({ entry, onClose }: Props) {
 
   return (
     <div className="fade-in bg-white rounded-xl shadow-sm border border-stone-200 p-6 relative">
-      <button
-        onClick={() => {
-          deleteEntry(entry.id);
-          onClose?.();
-        }}
-        className="absolute top-3 right-3 w-7 h-7 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-600"
-        title={t('deleteRecord')}
-      >
-        ×
-      </button>
+      {!hideDelete && (
+        <button
+          onClick={() => {
+            deleteEntry(entry.id);
+            onClose?.();
+          }}
+          className="absolute top-3 right-3 w-7 h-7 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+          title={t('deleteRecord')}
+        >
+          ×
+        </button>
+      )}
 
       {/* The "已缓存" badge used to sit in the top-left of the card with
           absolute positioning, but on Chinese characters the pinyin row
