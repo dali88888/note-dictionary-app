@@ -249,16 +249,22 @@ async function applyCloudCacheHit(opts: {
     (s) => s.kind === 'auto' && s.name === todayKey,
   );
   if (!autoSession) {
-    const { data: sessRow, error: sessErr } = await supabase
-      .from('class_sessions')
-      .insert({
-        owner_user_id: userId,
-        managed_student_id: currentManagedStudentId,
-        name: todayKey,
-        kind: 'auto',
-      })
-      .select()
-      .single();
+    const { data: sessRow, error: sessErr } = await withSupabaseTimeout(
+      (signal) =>
+        supabase
+          .from('class_sessions')
+          .insert({
+            owner_user_id: userId,
+            managed_student_id: currentManagedStudentId,
+            name: todayKey,
+            kind: 'auto',
+          })
+          .abortSignal(signal)
+          .select()
+          .single(),
+      SUPABASE_WRITE_TIMEOUT_MS,
+      'cache-hit/class_sessions.insert',
+    );
     if (sessErr) throw sessErr;
     autoSession = sessionFromRow(sessRow as SessionRow, []);
     updatedSessions = [autoSession, ...updatedSessions];
@@ -282,7 +288,12 @@ async function applyCloudCacheHit(opts: {
       session_id: s.id,
       entry_id: cached.id,
     }));
-    const { error: linkErr } = await supabase.from('session_entries').insert(links);
+    const { error: linkErr } = await withSupabaseTimeout(
+      (signal) =>
+        supabase.from('session_entries').insert(links).abortSignal(signal),
+      SUPABASE_WRITE_TIMEOUT_MS,
+      'cache-hit/session_entries.insert',
+    );
     if (linkErr) throw linkErr;
     // Mirror locally.
     const linkedIds = new Set(targetSessions.map((s) => s.id));
@@ -299,6 +310,47 @@ async function applyCloudCacheHit(opts: {
     error: null,
   }));
 }
+
+/**
+ * Wrap a Supabase query builder call in an AbortController so it can't
+ * hang forever.  Field-reported failure mode: after the tab has been
+ * idle for a while, `supabase.from(...).insert(...)` sometimes never
+ * resolves — the previous fetch socket is wedged after Chrome
+ * throttling, but the SDK still awaits it indefinitely.  Symptom:
+ * the SearchBox stays on "查询中..." even though the AI call already
+ * completed (you can confirm this by refreshing and re-querying the
+ * same word — the post-refresh retry hits the global cache and
+ * returns instantly with the "已缓存" badge, proving the AI ran on
+ * the wedged attempt).
+ *
+ * supabase-js v2 query builders accept `.abortSignal(signal)` —
+ * passing one through makes them respect normal AbortController
+ * semantics, so a timeout fires a real abort and the await rejects.
+ * That's much better than the current behavior of awaiting forever.
+ *
+ * Caller passes a builder fn that takes the signal.  This keeps the
+ * call site readable (`.abortSignal(signal)` is just one extra link
+ * in the chain) without losing the type information.
+ */
+async function withSupabaseTimeout<T>(
+  build: (signal: AbortSignal) => PromiseLike<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    // eslint-disable-next-line no-console
+    console.warn(`[dictStore] ${label} aborting after ${ms}ms — Supabase write may be wedged after idle`);
+    controller.abort();
+  }, ms);
+  try {
+    return await build(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const SUPABASE_WRITE_TIMEOUT_MS = 10_000;
 
 /**
  * Reconcile sessions after a query() insert.
@@ -1028,19 +1080,28 @@ export const useDictStore = create<DictState>()(
           const targetSessions = fresh.sessions;
 
           // 1. Insert the entry.  DB fills id + queried_at.
-          const { data: entryRow, error: entryErr } = await supabase
-            .from('entries')
-            .insert({
-              owner_user_id: userId,
-              managed_student_id: targetManagedStudentId,
-              word: data.word,
-              direction,
-              language,
-              word_syllables: data.wordSyllables,
-              meanings: data.meanings,
-            })
-            .select()
-            .single();
+          //    Wrapped in withSupabaseTimeout so a wedged Supabase
+          //    socket (common after the tab has been idle for a while)
+          //    can't keep us in "查询中" forever.
+          const { data: entryRow, error: entryErr } = await withSupabaseTimeout(
+            (signal) =>
+              supabase
+                .from('entries')
+                .insert({
+                  owner_user_id: userId,
+                  managed_student_id: targetManagedStudentId,
+                  word: data.word,
+                  direction,
+                  language,
+                  word_syllables: data.wordSyllables,
+                  meanings: data.meanings,
+                })
+                .abortSignal(signal)
+                .select()
+                .single(),
+            SUPABASE_WRITE_TIMEOUT_MS,
+            'query/entries.insert',
+          );
           if (entryErr) throw entryErr;
           const newEntry = entryFromRow(entryRow as EntryRow);
           // eslint-disable-next-line no-console
@@ -1055,16 +1116,22 @@ export const useDictStore = create<DictState>()(
           );
           let updatedSessions = targetSessions.slice();
           if (!autoSession) {
-            const { data: sessRow, error: sessErr } = await supabase
-              .from('class_sessions')
-              .insert({
-                owner_user_id: userId,
-                managed_student_id: targetManagedStudentId,
-                name: todayKey,
-                kind: 'auto',
-              })
-              .select()
-              .single();
+            const { data: sessRow, error: sessErr } = await withSupabaseTimeout(
+              (signal) =>
+                supabase
+                  .from('class_sessions')
+                  .insert({
+                    owner_user_id: userId,
+                    managed_student_id: targetManagedStudentId,
+                    name: todayKey,
+                    kind: 'auto',
+                  })
+                  .abortSignal(signal)
+                  .select()
+                  .single(),
+              SUPABASE_WRITE_TIMEOUT_MS,
+              'query/class_sessions.insert',
+            );
             if (sessErr) throw sessErr;
             autoSession = sessionFromRow(sessRow as SessionRow, []);
             updatedSessions = [autoSession, ...updatedSessions];
@@ -1084,9 +1151,15 @@ export const useDictStore = create<DictState>()(
               entry_id: newEntry.id,
             });
           }
-          const { error: linkErr } = await supabase
-            .from('session_entries')
-            .insert(linksToInsert);
+          const { error: linkErr } = await withSupabaseTimeout(
+            (signal) =>
+              supabase
+                .from('session_entries')
+                .insert(linksToInsert)
+                .abortSignal(signal),
+            SUPABASE_WRITE_TIMEOUT_MS,
+            'query/session_entries.insert',
+          );
           if (linkErr) throw linkErr;
 
           // 4. Mirror locally — use the FRESHEST `entries` map at the
@@ -1116,7 +1189,19 @@ export const useDictStore = create<DictState>()(
           const msg = err instanceof Error ? err.message : String(err);
           // eslint-disable-next-line no-console
           console.error('[dictStore] query failed', err);
-          set({ loading: false, error: msg });
+          // If the error came from one of our withSupabaseTimeout
+          // aborts (typical post-idle wedge: response was received,
+          // but the DB write hangs forever on the SDK's cached socket),
+          // give the user a clear next step instead of dumping the
+          // raw "AbortError" / "signal is aborted without reason".
+          // The AI result is already in the global cache from our
+          // /api/translate request, so a refresh + re-query hits
+          // cache and is instant.
+          const isAbort = /aborted?|abort/i.test(msg) || (err instanceof DOMException && err.name === 'AbortError');
+          const friendly = isAbort
+            ? '云端保存超时（页面闲置过久后偶发）。请刷新页面后再查一次——结果已缓存，重试会立刻返回。'
+            : msg;
+          set({ loading: false, error: friendly });
         }
       },
 
