@@ -35,7 +35,7 @@ import { supabase, withTimeout } from '../auth/supabaseClient';
 import type { ManagedStudent } from '../auth/types';
 
 const DEFAULT_LANGUAGE = 'English';
-const DEFAULT_UI_LANG: UILang = 'zh';
+const DEFAULT_UI_LANG: UILang = 'en';
 
 /**
  * localStorage key used by the pre-cloud version of this app.  Step 4's

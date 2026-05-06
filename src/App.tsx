@@ -11,6 +11,7 @@ import {
   readLegacyStats,
   legacyImportSkipped,
 } from './store/dictStore';
+import { RTL_LANGS } from './i18n';
 
 type View = 'search' | 'history';
 
@@ -22,6 +23,20 @@ export default function App() {
   const hydrated = useDictStore((s) => s.hydrated);
   const cloudEntryCount = useDictStore((s) => Object.keys(s.entries).length);
   const cloudSessionCount = useDictStore((s) => s.sessions.length);
+  const uiLanguage = useDictStore((s) => s.prefs.uiLanguage);
+
+  // Mirror the current UI language onto the <html> element:
+  //   • `lang` so screen readers & search engines pick the right
+  //     pronunciation / language model
+  //   • `dir` so Arabic flips to RTL automatically.  Tailwind's
+  //     `rtl:` variants and many CSS logical properties (margin-inline-*,
+  //     text-end, etc.) do the right thing once `dir="rtl"` is set,
+  //     so the bulk of the layout adapts without per-component edits.
+  useEffect(() => {
+    const html = document.documentElement;
+    html.lang = uiLanguage;
+    html.dir = (RTL_LANGS as ReadonlyArray<string>).includes(uiLanguage) ? 'rtl' : 'ltr';
+  }, [uiLanguage]);
 
   // Bridge AuthContext → dictStore.  Whenever auth flips:
   //   • authed → load entries + sessions for this user (+ current ctx) from Supabase
