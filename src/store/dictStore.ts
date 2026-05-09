@@ -367,6 +367,44 @@ async function persistNewEntryToCloud(
 }
 
 /**
+ * Force-refresh path: an entry already exists in the cloud, but the
+ * user clicked "Refresh" because the AI's original answer looked
+ * wrong (bad pinyin / example missing the queried word / etc).  We
+ * re-called the AI with `force=true` so the L2 cache was overwritten;
+ * now mirror that fresh payload onto the existing entries row in
+ * place — same id, so any session links / history positioning are
+ * preserved.
+ *
+ * Background task; the caller already updated the in-memory entry
+ * synchronously and shouldn't wait on this round-trip.
+ */
+async function updateExistingEntryInCloud(
+  entry: DictionaryEntry,
+): Promise<void> {
+  const { error } = await withSupabaseTimeout(
+    (signal) =>
+      supabase
+        .from('entries')
+        .update({
+          word: entry.word,
+          direction: entry.direction ?? 'zh-to-other',
+          language: entry.language,
+          word_syllables: entry.wordSyllables,
+          meanings: entry.meanings,
+        })
+        .eq('id', entry.id)
+        .abortSignal(signal),
+    SUPABASE_WRITE_TIMEOUT_MS,
+    'persist/entries.update(refresh)',
+  );
+  if (error) throw error;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[dictStore] refreshed entry ${entry.id} word="${entry.word}"`,
+  );
+}
+
+/**
  * Cache-hit path: show the cached entry RIGHT NOW (synchronously),
  * then re-link it to today's session group in the background so a
  * re-query during a class still includes it in that class's PPT
@@ -662,7 +700,22 @@ interface DictState {
    */
   importLegacy: () => Promise<{ entries: number; sessions: number; error?: string }>;
 
-  query: (word: string, direction?: TranslationDirection) => Promise<void>;
+  /**
+   * Look up `word`.
+   *
+   * `opts.force` (default false): when true, bypass BOTH the per-user
+   * library cache (in `entries`) and the global cache server-side, so
+   * the AI is always called.  Used by the Refresh button on the result
+   * card to regenerate a stale/incorrect answer.  An existing entry
+   * matching this word + language + direction is updated in place
+   * (same id, same session links); a fresh query falls back to the
+   * normal new-entry path.
+   */
+  query: (
+    word: string,
+    direction?: TranslationDirection,
+    opts?: { force?: boolean },
+  ) => Promise<void>;
   clearLatest: () => void;
   deleteEntry: (entryId: string) => Promise<void>;
 
@@ -1061,9 +1114,10 @@ export const useDictStore = create<DictState>()(
 
       /* ─────────── query / mutate ─────────── */
 
-      query: async (rawWord, direction = 'zh-to-other') => {
+      query: async (rawWord, direction = 'zh-to-other', opts) => {
         const word = rawWord.trim();
         if (!word) return;
+        const force = opts?.force === true;
         // Flip the spinner ON synchronously (before any await) so the
         // SearchBox button immediately reflects the click.  Anything
         // that throws below — auth lookup, network fetch, DB insert —
@@ -1085,17 +1139,23 @@ export const useDictStore = create<DictState>()(
            * For forward direction we know the target language up
            * front so it's part of the match.  For reverse, language
            * is auto-detected by AI; match on word + direction only.
+           *
+           * `force` SKIPS the per-user L1 lookup entirely so we always
+           * call the AI.  We DO still locate any matching existing
+           * entry below (existingEntry) so we can update it in place
+           * once the fresh payload arrives — that preserves the
+           * entry's id and any session links.
            * ────────────────────────────────────────────────────── */
           const cache = userId ? entries : anonCache;
           const cacheTargetLang =
             direction === 'zh-to-other' ? prefs.language : '';
-          const cached = findCachedEntry(cache, word, cacheTargetLang, direction);
+          const existingEntry = findCachedEntry(cache, word, cacheTargetLang, direction);
 
-          if (cached && !userId) {
+          if (!force && existingEntry && !userId) {
             // Anon cache hit — surface the cached entry, no AI call.
             set({
-              entries: { [cached.id]: cached },
-              latestEntryId: cached.id,
+              entries: { [existingEntry.id]: existingEntry },
+              latestEntryId: existingEntry.id,
               latestFromCache: true,
               loading: false,
               error: null,
@@ -1103,7 +1163,7 @@ export const useDictStore = create<DictState>()(
             return;
           }
 
-          if (cached && userId) {
+          if (!force && existingEntry && userId) {
             // Signed-in cache hit — make sure the entry is also linked
             // to today's auto session and the active manual class
             // (if any), so re-querying a known word during a class
@@ -1115,7 +1175,7 @@ export const useDictStore = create<DictState>()(
             // the instant we know it's a hit, regardless of how the
             // DB write goes.
             applyCloudCacheHit({
-              cached,
+              cached: existingEntry,
               userId,
               getState: get,
               setStore: set,
@@ -1123,9 +1183,11 @@ export const useDictStore = create<DictState>()(
             return;
           }
 
-          /* ─── L1 miss — call /api/translate (which itself checks
-                 the global L2 cache before hitting the AI) ─────────── */
-          const data = await translateWord(word, prefs.language, direction);
+          /* ─── L1 miss (or force) — call /api/translate (which
+                 itself checks the global L2 cache before hitting the AI,
+                 unless `force` is set, in which case it skips L2 too and
+                 upserts the result back into L2) ───────────────────── */
+          const data = await translateWord(word, prefs.language, direction, force);
 
           const language =
             direction === 'zh-to-other'
@@ -1144,10 +1206,16 @@ export const useDictStore = create<DictState>()(
           // (HistoryView is sign-in only — anon users see only the
           // most recent result), but anonCache keeps the full library.
           if (!userId) {
+            // Force-refresh path (anon): reuse the existing id so the
+            // anonCache replaces the stale row instead of accumulating
+            // duplicates.  When this is a normal first-time miss,
+            // existingEntry is null and we mint a fresh id.
             const id =
-              (typeof crypto !== 'undefined' && 'randomUUID' in crypto
-                ? crypto.randomUUID()
-                : `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+              force && existingEntry
+                ? existingEntry.id
+                : typeof crypto !== 'undefined' && 'randomUUID' in crypto
+                  ? crypto.randomUUID()
+                  : `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const anonEntry: DictionaryEntry = {
               id,
               direction,
@@ -1164,6 +1232,46 @@ export const useDictStore = create<DictState>()(
               latestFromCache: serverCacheHit,
               loading: false,
               error: null,
+            });
+            return;
+          }
+
+          // ── Force-refresh signed-in path: update existing entry ────
+          //
+          // We already have a row for this (word, language, direction)
+          // in the cloud; the user clicked Refresh because they didn't
+          // like the AI's previous answer.  Mirror the fresh payload
+          // onto the existing row in place — same id, so any session
+          // links / history positioning are preserved.  The L2 cache
+          // was already overwritten by /api/translate (force=true →
+          // upsert).
+          if (force && existingEntry) {
+            const refreshedEntry: DictionaryEntry = {
+              ...existingEntry,
+              word: data.word,
+              wordSyllables: data.wordSyllables,
+              language,
+              meanings: data.meanings,
+              queriedAt: Date.now(),
+            };
+            set((state) => ({
+              entries: { ...state.entries, [existingEntry.id]: refreshedEntry },
+              latestEntryId: existingEntry.id,
+              // Don't show the "⚡ Cached" badge after a refresh — the
+              // user just re-paid for an AI call, the result is
+              // demonstrably *not* from cache from their perspective.
+              latestFromCache: false,
+              loading: false,
+              error: null,
+            }));
+            // Background mirror to cloud — same fire-and-forget
+            // pattern as persistNewEntryToCloud.
+            updateExistingEntryInCloud(refreshedEntry).catch((err) => {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `[dictStore] background refresh persist failed for entry ${existingEntry.id} (word="${refreshedEntry.word}") — UI updated but cloud row may still hold the old payload until you refresh + re-query:`,
+                err,
+              );
             });
             return;
           }

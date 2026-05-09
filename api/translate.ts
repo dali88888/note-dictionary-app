@@ -19,6 +19,20 @@ interface TranslateRequest {
   word: string;
   language: string;
   direction?: Direction;
+  /**
+   * When true, bypass the global L2 cache (`dictionary_cache`):
+   *   - skip the SELECT lookup → always call the AI
+   *   - on store, UPSERT (Prefer: resolution=merge-duplicates) so the
+   *     freshly-generated payload OVERWRITES any stale cached entry
+   *     for the same (direction, word_normalized, language) key.
+   *
+   * Used by the "Refresh" button on the result card so users can
+   * regenerate an answer when the cached one looks wrong (e.g. AI
+   * returned bad pinyin or an example that doesn't contain the
+   * queried word).  Without this, a bad row in the global cache
+   * would keep being served on every subsequent query.
+   */
+  force?: boolean;
 }
 
 // Mirror of TranslateResponse — duplicated here so the API package has no
@@ -66,12 +80,24 @@ ${word}
 
 【词条模式】严格要求：
 1. 列出所有常用含义与词性，每个单独作为一个 meaning 对象。
-2. 如果是多音字或多音词，在每个 meaning 中填写 pinyin 字段表示该义项的读音。
-3. 每个 meaning 提供一个自然、地道的中文例句。
-4. 例句拆分为 Syllable 数组（见下方"Syllable 拆分规则"）。
-5. wordSyllables 同样按 Syllable 拆分规则给出该词的主拼音读法（多音字取最常用）。
-6. partOfSpeech、definition、example.translation 全部使用 ${language} 书写。
-7. pinyin 使用带声调的带调标字母（例如 "hǎo"、"zhōng"、"cháng"），不要使用数字声调。
+2. 如果一个词由于读音不同对应不同含义（多音字 / 多音词），**必须**为每个读音单独建立一个 meaning 对象，并在该对象的 pinyin 字段中填写该义项的真实读音。同一个汉字组合下不同的读音 = 不同的 meaning，绝不允许把它们合并到一个 meaning 中或共用同一个 pinyin。
+   示例："东西"有两个读法，对应两个完全不同的义项，必须各自单独成为一个 meaning：
+     • pinyin "dōng xi"（西轻声）→ "thing / object / stuff"
+     • pinyin "dōng xī"（西一声）→ "east and west / the directions east and west"
+   再如："长"在 "长大" 中读 "zhǎng"（动词，生长），在 "长江" 中读 "cháng"（形容词，长的）—— 必须给出两个 meaning。
+3. **拼音必须反映该义项的真实标准普通话读音，包括轻声（neutral tone）。轻声音节不带声调符号**：
+     • "朋友" → "péng you"（友为轻声，无调号）； 错误："péng yǒu"
+     • "妈妈" → "mā ma"（第二个 ma 为轻声）； "衣服" → "yī fu"； "先生" → "xiān sheng"
+     • "东西"（thing 义） → "dōng xi"； 错误："dōng xī" 或 "dōng xǐ"
+     • 凡是该字在普通话中读轻声的义项，pinyin 字段必须写作不带调号的形式。
+4. **每个 meaning 必须提供一个自然、地道的中文例句**，并且：
+     ★ 例句中**必须把被查询的"${word}"按原样写出**（连续子串，原字一字不差）。允许在例句中加入其他成分，但绝不允许只出现"${word}"的一部分、同义改写、或省略某个字。
+     ★ 例句应清楚体现该 meaning 的具体用法 —— 例如"天"作"日子/时间"义时，例句不能只是写一个气象场景，而要在例句中真正用"天"表达"日子"的意思（如"过了几天"、"那天我去了…"）。
+     ★ 不同 meaning 的例句应使用不同语境，避免雷同。
+5. 例句拆分为 Syllable 数组（见下方"Syllable 拆分规则"）。
+6. wordSyllables 同样按 Syllable 拆分规则给出该词的主拼音读法（多音字取最常用，且包含轻声标注）。
+7. partOfSpeech、definition、example.translation 全部使用 ${language} 书写。
+8. pinyin 使用带声调的带调标字母（例如 "hǎo"、"zhōng"、"cháng"），不要使用数字声调；轻声音节一律不带任何调号（写 "ma" 而非 "mǎ"）。
 
 【整句翻译模式】严格要求：
 1. 只输出**一个** meaning 对象，不要列多个。
@@ -125,6 +151,7 @@ Tasks:
    - example:
        For WORD/PHRASE inputs: { chinese, translation }
          chinese: a natural, idiomatic Chinese sentence USING THIS CANDIDATE, broken per-character with pinyin.
+           ★ STRICT: the example MUST contain the candidate's hanzi (the value of hanziSyllables joined together) as a contiguous substring — written exactly the same way, character for character. Do NOT replace it with a synonym or write only part of it.
          translation: that sentence's equivalent in the SOURCE LANGUAGE.
        For FULL SENTENCE inputs: set example to { "chinese": [], "translation": "" } — empty arrays/strings, no example needed because the candidate IS the translation already.
 4. Top-level fields:
@@ -132,7 +159,15 @@ Tasks:
    - wordSyllables: ALWAYS return an empty array [] (the learner did not input Chinese — there's nothing to syllabify on the input side).
    - language: detected source language as described above.
 
-Pinyin uses tone-marked letters ("hǎo", "zhōng", "shén"), never numeric tones.
+Pinyin must reflect the actual standard Mandarin reading of each character in context, INCLUDING NEUTRAL TONE (轻声).
+- Tone-marked vowels for tones 1–4: "hǎo", "zhōng", "shén", "cháng".
+- For neutral-tone syllables, write the vowels WITHOUT any tone mark — e.g.
+    "朋友" → "péng you" (友 is neutral; not "yǒu")
+    "妈妈" → "mā ma"
+    "东西" (meaning 'thing/object') → "dōng xi" (西 is neutral; not "xī")
+    "先生" → "xiān sheng"
+- Never use numeric tones.
+- If a single hanzi has multiple readings that map to different meanings (e.g. 东西 dōngxi 'thing' vs dōngxī 'east and west'), each meaning MUST get its own meaning object with the correct pinyin for that meaning — do NOT collapse them.
 
 Syllable splitting rules (CRITICAL — must be followed exactly for both hanziSyllables and example.chinese):
 - ONE Chinese character per Syllable object.  Never group multiple characters under a single hanzi field.
@@ -801,6 +836,16 @@ async function storeCache(
   word: string,
   language: string,
   payload: ApiResponse,
+  /**
+   * When true, OVERWRITE any existing row for the same key instead of
+   * silently skipping on conflict.  Used by the Refresh button so a
+   * regenerated payload replaces the bad cached one.  Implemented via
+   * PostgREST's `Prefer: resolution=merge-duplicates` upsert mode,
+   * targeting the (word_normalized, language) partial unique index
+   * for forward and (word_normalized) for reverse — matching the
+   * indexes declared in supabase/schema.sql.
+   */
+  upsert = false,
 ): Promise<void> {
   const supaUrl = envSupabaseUrl();
   const supaKey = envSupabaseKey();
@@ -809,35 +854,46 @@ async function storeCache(
   const wordKey = normalizeCacheKey(word);
   const langKey = cacheLanguageForWrite(direction, language);
 
-  // Bare INSERT.  If two users hit the same word concurrently and the
-  // unique index trips on the second insert, PostgREST returns 409 —
-  // we catch that and treat it as success (the cache already has the
-  // entry, just not from us).
+  // PostgREST upsert needs us to name the conflict columns explicitly
+  // because the unique constraint is a *partial* index (filtered by
+  // direction).  The `on_conflict` query param tells PostgREST which
+  // index to use; without it the upsert would target the table's PK
+  // (`id`) and never match.
+  const onConflict =
+    direction === 'zh-to-other' ? 'word_normalized,language' : 'word_normalized';
+
+  const url = upsert
+    ? `${supaUrl.replace(/\/+$/, '')}/rest/v1/dictionary_cache?on_conflict=${encodeURIComponent(onConflict)}`
+    : `${supaUrl.replace(/\/+$/, '')}/rest/v1/dictionary_cache`;
+
+  const headers: Record<string, string> = {
+    apikey: supaKey,
+    authorization: `Bearer ${supaKey}`,
+    'content-type': 'application/json',
+    // Don't return the inserted/updated row — we don't need it.
+    prefer: upsert ? 'return=minimal,resolution=merge-duplicates' : 'return=minimal',
+  };
+
   try {
-    const res = await fetch(
-      `${supaUrl.replace(/\/+$/, '')}/rest/v1/dictionary_cache`,
-      {
-        method: 'POST',
-        headers: {
-          apikey: supaKey,
-          authorization: `Bearer ${supaKey}`,
-          'content-type': 'application/json',
-          // Don't return the inserted row — we don't need it.
-          prefer: 'return=minimal',
-        },
-        body: JSON.stringify({
-          direction,
-          word_normalized: wordKey,
-          language: langKey,
-          payload,
-        }),
-      },
-    );
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        direction,
+        word_normalized: wordKey,
+        language: langKey,
+        payload,
+      }),
+    });
+    // Bare INSERT path: 409 = a concurrent writer already filled this
+    // cell, treat as success.  Upsert path: 409 should not happen since
+    // the merge resolution turns conflicts into UPDATEs, but we still
+    // tolerate it to avoid spurious noise.
     if (!res.ok && res.status !== 409) {
       const text = await res.text().catch(() => '');
       // eslint-disable-next-line no-console
       console.warn(
-        `[cache] store HTTP ${res.status}: ${text.slice(0, 200)}`,
+        `[cache] store HTTP ${res.status} (upsert=${upsert}): ${text.slice(0, 200)}`,
       );
     }
   } catch (err) {
@@ -872,6 +928,7 @@ export default async function handler(req: Request): Promise<Response> {
   const language = payload.language?.trim();
   const direction: Direction =
     payload.direction === 'other-to-zh' ? 'other-to-zh' : 'zh-to-other';
+  const force = payload.force === true;
 
   if (!word) {
     return json({ error: '缺少 word 参数' }, 400);
@@ -893,9 +950,16 @@ export default async function handler(req: Request): Promise<Response> {
   // queried this (word, language, direction), serve their AI result
   // instantly and skip the Gemini call entirely.  Cache lookup is
   // ~50–200ms — negligible vs the 5–15s AI call we save on hits.
-  const cached = await lookupCache(direction, word, language);
-  if (cached) {
-    return json({ ...cached, _fromCache: true } as ApiResponse, 200);
+  //
+  // If `force` is set, skip the lookup entirely so the AI is called
+  // unconditionally — the response will then OVERWRITE the existing
+  // cache row (see storeCache(..., upsert=true) below).  This is
+  // how the Refresh button regenerates a known-bad cache entry.
+  if (!force) {
+    const cached = await lookupCache(direction, word, language);
+    if (cached) {
+      return json({ ...cached, _fromCache: true } as ApiResponse, 200);
+    }
   }
 
   const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
@@ -940,7 +1004,7 @@ export default async function handler(req: Request): Promise<Response> {
     // imperceptible to the user.  Errors are caught here so a cache
     // outage never breaks the actual response.
     try {
-      await storeCache(direction, word, language, result);
+      await storeCache(direction, word, language, result, force /* upsert when refreshing */);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[cache] post-AI write rejected:', e);

@@ -95,6 +95,7 @@ const DICT = {
     pronunciation: 'Pron.: ',
     example: 'Example',
     deleteRecord: 'Delete this record',
+    refreshTooltip: 'Re-query (skip cache)',
     previewEntryHint: 'Click to view full definition',
 
     registerCasual: 'casual',
@@ -294,6 +295,7 @@ const DICT = {
     pronunciation: '读音：',
     example: '例句',
     deleteRecord: '删除此记录',
+    refreshTooltip: '重新查询（跳过缓存）',
     previewEntryHint: '点击查看完整释义',
 
     registerCasual: '口语',
@@ -491,6 +493,7 @@ const DICT = {
     pronunciation: 'Pron.: ',
     example: 'Ejemplo',
     deleteRecord: 'Eliminar este registro',
+    refreshTooltip: 'Volver a consultar (omitir caché)',
     previewEntryHint: 'Haz clic para ver la definición completa',
 
     registerCasual: 'casual',
@@ -695,6 +698,7 @@ const DICT = {
     pronunciation: 'Aussprache: ',
     example: 'Beispiel',
     deleteRecord: 'Diesen Eintrag löschen',
+    refreshTooltip: 'Erneut abfragen (Cache überspringen)',
     previewEntryHint: 'Zum Anzeigen der vollständigen Definition klicken',
 
     registerCasual: 'umgangssprachlich',
@@ -899,6 +903,7 @@ const DICT = {
     pronunciation: 'Pron. : ',
     example: 'Exemple',
     deleteRecord: 'Supprimer cet enregistrement',
+    refreshTooltip: 'Rechercher à nouveau (ignorer le cache)',
     previewEntryHint: 'Cliquez pour voir la définition complète',
 
     registerCasual: 'familier',
@@ -1103,6 +1108,7 @@ const DICT = {
     pronunciation: '発音：',
     example: '例文',
     deleteRecord: 'この記録を削除',
+    refreshTooltip: '再検索（キャッシュをスキップ）',
     previewEntryHint: 'クリックして完全な定義を表示',
 
     registerCasual: 'カジュアル',
@@ -1303,6 +1309,7 @@ const DICT = {
     pronunciation: '발음: ',
     example: '예문',
     deleteRecord: '이 기록 삭제',
+    refreshTooltip: '다시 검색 (캐시 건너뛰기)',
     previewEntryHint: '클릭하면 전체 정의 보기',
 
     registerCasual: '캐주얼',
@@ -1503,6 +1510,7 @@ const DICT = {
     pronunciation: 'Произн.: ',
     example: 'Пример',
     deleteRecord: 'Удалить эту запись',
+    refreshTooltip: 'Повторить запрос (без кэша)',
     previewEntryHint: 'Нажмите, чтобы увидеть полное определение',
 
     registerCasual: 'разговорный',
@@ -1703,6 +1711,7 @@ const DICT = {
     pronunciation: 'النطق: ',
     example: 'مثال',
     deleteRecord: 'حذف هذا السجل',
+    refreshTooltip: 'إعادة البحث (تجاوز ذاكرة التخزين المؤقت)',
     previewEntryHint: 'انقر لعرض التعريف الكامل',
 
     registerCasual: 'عامي',

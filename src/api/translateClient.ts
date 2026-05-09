@@ -30,6 +30,13 @@ export async function translateWord(
   word: string,
   language: string,
   direction: TranslationDirection = 'zh-to-other',
+  /**
+   * When true, ask the server to bypass the global L2 cache (force a
+   * fresh AI call) and OVERWRITE any existing cache row.  Used by the
+   * "Refresh" button on the result card so users can regenerate a
+   * known-bad answer without having to wait for cache TTL or run SQL.
+   */
+  force = false,
 ): Promise<TranslateResponse> {
   // getSession() returns whatever the client has cached locally.  With
   // autoRefreshToken: true (set in supabaseClient), the access_token is
@@ -70,7 +77,10 @@ export async function translateWord(
     res = await fetch('/api/translate', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ word, language, direction }),
+      // Only include `force` in the body when it's actually true so
+      // routine requests stay byte-identical to before this change
+      // (helps with any HTTP-level caches downstream).
+      body: JSON.stringify(force ? { word, language, direction, force: true } : { word, language, direction }),
       signal: controller.signal,
     });
   } catch (err) {

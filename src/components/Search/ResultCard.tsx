@@ -37,31 +37,82 @@ interface Props {
 export function ResultCard({ entry, onClose, hideDelete = false }: Props) {
   const showPinyin = useDictStore((s) => s.prefs.showPinyin);
   const deleteEntry = useDictStore((s) => s.deleteEntry);
+  const query = useDictStore((s) => s.query);
+  const loading = useDictStore((s) => s.loading);
   // True when the most recent query() resolved from the library cache
   // instead of calling the AI.  Surfacing this saves the user a "wait,
   // why was that instant?" moment and signals "we just saved you tokens".
   const fromCache = useDictStore(
     (s) => s.latestFromCache && s.latestEntryId === entry.id,
   );
+  // Hide the Refresh affordance on the History preview — refreshing a
+  // historical entry from inside its preview modal is a confusing UX
+  // (the preview list parent state isn't clearly tied to it).  We piggy-
+  // back on `hideDelete` because both buttons share the "this card is
+  // being shown read-only" semantics.
+  const showRefresh = !hideDelete;
   const { t } = useT();
 
   const isReverse = entry.direction === 'other-to-zh';
   const sentenceMode = isSentenceMode(entry);
 
+  const handleRefresh = () => {
+    if (loading) return;
+    // Re-call /api/translate with force=true.  Server skips the L2
+    // cache, calls the AI, and upserts the global dictionary_cache so
+    // every future user gets the new (correct) payload.  dictStore
+    // updates this same entry id in place, preserving session links.
+    void query(entry.word, entry.direction ?? 'zh-to-other', { force: true });
+  };
+
   return (
     <div className="fade-in bg-white rounded-xl shadow-sm border border-stone-200 p-6 relative">
-      {!hideDelete && (
-        <button
-          onClick={() => {
-            deleteEntry(entry.id);
-            onClose?.();
-          }}
-          className="absolute top-3 right-3 w-7 h-7 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-600"
-          title={t('deleteRecord')}
-        >
-          ×
-        </button>
-      )}
+      {/* Top-right action stack: Refresh + Delete.  Inline-flex so the
+          two buttons can't overlap on long words / RTL layouts.
+          Refresh first (left of ×) because it's the safer action. */}
+      <div className="absolute top-3 right-3 flex items-center gap-1">
+        {showRefresh && (
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={loading}
+            className="w-7 h-7 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-600 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+            title={t('refreshTooltip')}
+            aria-label={t('refreshTooltip')}
+          >
+            {/* Inline SVG so we don't pull in an icon library for one glyph.
+                Standard circular-arrow "refresh" icon. */}
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 12a9 9 0 1 1-3-6.7" />
+              <path d="M21 4v5h-5" />
+            </svg>
+          </button>
+        )}
+        {!hideDelete && (
+          <button
+            type="button"
+            onClick={() => {
+              deleteEntry(entry.id);
+              onClose?.();
+            }}
+            className="w-7 h-7 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+            title={t('deleteRecord')}
+          >
+            ×
+          </button>
+        )}
+      </div>
 
       {/* The "已缓存" badge used to sit in the top-left of the card with
           absolute positioning, but on Chinese characters the pinyin row
