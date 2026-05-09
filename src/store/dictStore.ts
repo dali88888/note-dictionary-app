@@ -45,10 +45,24 @@ const DEFAULT_UI_LANG: UILang = 'en';
 export const LEGACY_KEY = 'note-dict-v1';
 export const LEGACY_SKIP_KEY = 'note-dict-import-skipped';
 
+/**
+ * Sort modes for the StudentManager folder list.  Mirrors the three
+ * orderings a Windows folder view offers — by name, by date created,
+ * by date last modified.  We treat "last modified" as last *activity*
+ * (most recent entry queried into that folder) rather than the row's
+ * own updated_at: the user's mental model is "when did I last touch
+ * this folder", which for our app means "when did I last query a
+ * word for this student".
+ */
+export type StudentSortKey = 'name' | 'created' | 'activity';
+export type StudentSortDir = 'asc' | 'desc';
+
 interface Prefs {
   language: string;
   uiLanguage: UILang;
   showPinyin: boolean;
+  studentSortKey: StudentSortKey;
+  studentSortDir: StudentSortDir;
 }
 
 /* ───────────────────────── Postgres row shapes ───────────────────────── */
@@ -727,6 +741,7 @@ interface DictState {
   setLanguage: (language: string) => void;
   setUILanguage: (lang: UILang) => void;
   setShowPinyin: (v: boolean) => void;
+  setStudentSort: (key: StudentSortKey, dir: StudentSortDir) => void;
 
   collectEntries: (sessionIds: string[]) => DictionaryEntry[];
 }
@@ -743,6 +758,12 @@ export const useDictStore = create<DictState>()(
         language: DEFAULT_LANGUAGE,
         uiLanguage: DEFAULT_UI_LANG,
         showPinyin: true,
+        // Default StudentManager ordering: most recent activity at the
+        // top.  This matches how a teacher actually thinks about their
+        // folders mid-semester — the student you taught yesterday is
+        // the one you most likely want to open today.
+        studentSortKey: 'activity',
+        studentSortDir: 'desc',
       },
       currentManagedStudentId: null,
       managedStudents: [],
@@ -1537,6 +1558,11 @@ export const useDictStore = create<DictState>()(
       },
       setShowPinyin: (v) => {
         set((s) => ({ prefs: { ...s.prefs, showPinyin: v } }));
+      },
+      setStudentSort: (key, dir) => {
+        set((s) => ({
+          prefs: { ...s.prefs, studentSortKey: key, studentSortDir: dir },
+        }));
       },
 
       /* ─────────── derived helpers ─────────── */

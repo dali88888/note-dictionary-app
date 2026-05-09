@@ -17,9 +17,13 @@
  * delete of all that student's entries+sessions) is destructive and
  * worth a beat of friction.
  */
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useDictStore } from '../../store/dictStore';
+import {
+  useDictStore,
+  type StudentSortKey,
+} from '../../store/dictStore';
+import { supabase } from '../../auth/supabaseClient';
 import { useT } from '../../i18n/useT';
 import { Button } from '../UI/Button';
 import type { ManagedStudent } from '../../auth/types';
@@ -33,10 +37,106 @@ export function StudentManager({ onClose }: Props) {
   const addManagedStudent = useDictStore((s) => s.addManagedStudent);
   const renameManagedStudent = useDictStore((s) => s.renameManagedStudent);
   const deleteManagedStudent = useDictStore((s) => s.deleteManagedStudent);
+  const studentSortKey = useDictStore((s) => s.prefs.studentSortKey);
+  const studentSortDir = useDictStore((s) => s.prefs.studentSortDir);
+  const setStudentSort = useDictStore((s) => s.setStudentSort);
   const { t } = useT();
 
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // ── Last-activity aggregate ────────────────────────────────────
+  //
+  // For the "activity" sort mode we need max(queried_at) per managed
+  // student.  We can't derive this from the in-memory `entries` map
+  // because that's scoped to the currently-selected student context
+  // (the hydrate query filters by managed_student_id).
+  //
+  // So we issue one extra query when the modal opens: a thin SELECT
+  // returning just (managed_student_id, queried_at) for every entry
+  // this teacher owns, then group max() in JS.  Modest payload — a
+  // teacher with 20 students × 200 entries = 4000 rows of two fields,
+  // ~200 KB, sub-second.  RLS already restricts results to rows where
+  // owner_user_id = auth.uid().
+  //
+  // While the fetch is pending the activity-sort mode falls back to
+  // ordering by created_at (see sortedStudents below), which is a
+  // graceful degradation rather than a broken sort.
+  const [activityById, setActivityById] = useState<Map<string, number>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('entries')
+        .select('managed_student_id, queried_at')
+        .not('managed_student_id', 'is', null);
+      if (cancelled) return;
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.warn('[StudentManager] last-activity fetch failed (sort by activity will fall back to created):', error);
+        return;
+      }
+      const m = new Map<string, number>();
+      for (const row of (data ?? []) as Array<{
+        managed_student_id: string | null;
+        queried_at: string;
+      }>) {
+        if (!row.managed_student_id) continue;
+        const ts = new Date(row.queried_at).getTime();
+        const cur = m.get(row.managed_student_id) ?? 0;
+        if (ts > cur) m.set(row.managed_student_id, ts);
+      }
+      setActivityById(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ── Sorted view of the student list ─────────────────────────────
+  //
+  // Three ordering modes mirror Windows folder views:
+  //   • name      → alphabetical, locale-aware (handles 中/英/日 etc).
+  //   • created   → managed_students.created_at.
+  //   • activity  → max(queried_at) of any entry under this student,
+  //                 falling back to created_at when the folder has
+  //                 no entries yet OR the activity fetch is still
+  //                 pending.  Gives the "most recently used at the
+  //                 top" behavior teachers expect mid-semester.
+  //
+  // The direction toggle (asc/desc) flips the comparator in place.
+  // Memoized so re-renders triggered by an unrelated store change
+  // (typing in the Add input, etc.) don't re-sort the whole list.
+  const sortedStudents = useMemo(() => {
+    const arr = managedStudents.slice();
+    arr.sort((a, b) => {
+      let cmp = 0;
+      if (studentSortKey === 'name') {
+        // localeCompare with sensitivity:'base' so case + accent
+        // differences don't split otherwise-equal names; "anna"
+        // and "Anna" sort together.
+        cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      } else if (studentSortKey === 'created') {
+        cmp =
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      } else {
+        // activity
+        const aLast =
+          activityById.get(a.id) ?? new Date(a.created_at).getTime();
+        const bLast =
+          activityById.get(b.id) ?? new Date(b.created_at).getTime();
+        cmp = aLast - bLast;
+      }
+      // Stable tiebreaker so equal sort keys (two students added in the
+      // same millisecond, or two folders with no entries sharing only
+      // their created_at) don't shuffle unpredictably across renders.
+      if (cmp === 0) cmp = a.id.localeCompare(b.id);
+      return studentSortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [managedStudents, activityById, studentSortKey, studentSortDir]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,15 +200,72 @@ export function StudentManager({ onClose }: Props) {
             </Button>
           </form>
 
+          {/* Sort controls — shown only when there are at least 2
+              students, since 0–1 entries don't need ordering. */}
+          {managedStudents.length >= 2 && (
+            <div className="flex items-center gap-2 text-xs text-stone-500 border-t border-stone-100 pt-3">
+              <label htmlFor="student-sort-key" className="whitespace-nowrap">
+                {t('studentSortLabel')}
+              </label>
+              <select
+                id="student-sort-key"
+                value={studentSortKey}
+                onChange={(e) =>
+                  setStudentSort(
+                    e.target.value as StudentSortKey,
+                    studentSortDir,
+                  )
+                }
+                className="text-xs border border-stone-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                <option value="name">{t('studentSortByName')}</option>
+                <option value="created">{t('studentSortByCreated')}</option>
+                <option value="activity">{t('studentSortByActivity')}</option>
+              </select>
+              {/* Direction toggle: ↑ ascending / ↓ descending.  Click
+                  flips it.  Title hints at what each direction means
+                  for the currently-selected key (e.g. "A → Z" for name
+                  vs "Oldest first" for created/activity). */}
+              <button
+                type="button"
+                onClick={() =>
+                  setStudentSort(
+                    studentSortKey,
+                    studentSortDir === 'asc' ? 'desc' : 'asc',
+                  )
+                }
+                className="px-2 py-1 border border-stone-300 rounded text-stone-600 hover:bg-stone-50"
+                title={t(
+                  studentSortDir === 'asc'
+                    ? 'studentSortDirAscTooltip'
+                    : 'studentSortDirDescTooltip',
+                )}
+                aria-label={t(
+                  studentSortDir === 'asc'
+                    ? 'studentSortDirAscTooltip'
+                    : 'studentSortDirDescTooltip',
+                )}
+              >
+                {studentSortDir === 'asc' ? '↑' : '↓'}
+              </button>
+            </div>
+          )}
+
           {/* Existing rows */}
-          <div className="border-t border-stone-100 pt-3">
+          <div
+            className={
+              managedStudents.length >= 2
+                ? 'pt-1'
+                : 'border-t border-stone-100 pt-3'
+            }
+          >
             {managedStudents.length === 0 ? (
               <p className="text-sm text-stone-400 italic py-4 text-center">
                 {t('studentEmpty')}
               </p>
             ) : (
               <ul className="space-y-1">
-                {managedStudents.map((s) => (
+                {sortedStudents.map((s) => (
                   <StudentRow
                     key={s.id}
                     student={s}

@@ -319,6 +319,17 @@ function formatDate(ts: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/**
+ * YYYYMMDD with no separators — used in the export filename so the
+ * resulting file sorts naturally by date in any file manager and
+ * doesn't introduce dashes that some downstream tools (e.g. classroom
+ * LMS upload UIs) treat as field separators.
+ */
+function formatDateCompact(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /* ────────────────────────────────────────────────────────────────
  * Cover slide
  * ─────────────────────────────────────────────────────────────── */
@@ -1067,7 +1078,16 @@ export async function exportToPptx(
   buildCoverSlide(pres, sessions, entries, title, uiLang);
   entries.forEach((entry) => buildEntrySlides(pres, entry, opts, uiLang));
 
-  const filename = `${title.replace(/[\\/:*?"<>|]/g, '_')}-${formatDate(Date.now())}.pptx`;
+  // Filename: "<user-supplied or derived title>_YYYYMMDD.pptx".
+  //   • Underscore separator (not dash) — keeps the title visually
+  //     intact when the title itself contains dashes (e.g. session
+  //     names like "2026-05-09").
+  //   • Compact YYYYMMDD date — sorts chronologically in any file
+  //     manager regardless of locale and avoids the redundant dashes
+  //     that tripped up some downstream uploaders.
+  // Filesystem-illegal chars in the title are stripped via the same
+  // regex as before.
+  const filename = `${title.replace(/[\\/:*?"<>|]/g, '_')}_${formatDateCompact(Date.now())}.pptx`;
   await pres.writeFile({ fileName: filename });
 }
 
