@@ -38,7 +38,7 @@ type Vars = Record<string, string | number>;
 const DICT = {
   /* ─────────────────────────── English ─────────────────────────── */
   en: {
-    appTitle: 'Classroom Chinese Lookup',
+    appTitle: 'Dictionary & Note',
     tabSearch: 'Lookup',
     tabHistory: 'History & Export',
 
@@ -54,14 +54,14 @@ const DICT = {
     cancel: 'Cancel',
     confirm: 'OK',
 
-    startNewClass: '+ New class',
+    startNewClass: '+ New lesson',
     endClass: 'End class',
     currentClass: 'Class',
     wordsUnit: (v: Vars) => `· ${v.n} word${Number(v.n) === 1 ? '' : 's'}`,
     classNamePlaceholder: 'Class name, e.g. Business Chinese 3',
     start: 'Start',
 
-    searchPlaceholder: 'Enter a Chinese word or sentence (e.g. 长 / 一带一路 / 我想去中国旅行。)',
+    searchPlaceholder: 'Enter a word or sentence in any language (e.g. 长 / happy / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
       'Enter a word or sentence in any language (e.g. happy / je suis fatigué / "I want to travel to China")',
     searchBtn: 'Search',
@@ -250,7 +250,7 @@ const DICT = {
 
   /* ─────────────────────────── Chinese ─────────────────────────── */
   zh: {
-    appTitle: '课堂中文速查',
+    appTitle: 'Dictionary & Note',
     tabSearch: '查词',
     tabHistory: '历史 & 导出',
 
@@ -273,7 +273,7 @@ const DICT = {
     classNamePlaceholder: '课程名，如: 商务汉语 3',
     start: '开始',
 
-    searchPlaceholder: '输入中文词或整句，如：长 / 一带一路 / 我想去中国旅行。',
+    searchPlaceholder: '输入任意语言的词或整句，如：长 / happy / 一带一路 / 我想去中国旅行。',
     reverseSearchPlaceholder: '输入任意语言的词或整句，如 happy / je suis fatigué / "I want to travel to China"',
     searchBtn: '查询',
     searchLoading: '查询中…',
@@ -449,7 +449,7 @@ const DICT = {
 
   /* ─────────────────────────── Spanish ─────────────────────────── */
   es: {
-    appTitle: 'Diccionario de chino para clase',
+    appTitle: 'Dictionary & Note',
     tabSearch: 'Buscar',
     tabHistory: 'Historial y exportación',
 
@@ -472,7 +472,7 @@ const DICT = {
     classNamePlaceholder: 'Nombre de la clase, p. ej. Chino comercial 3',
     start: 'Empezar',
 
-    searchPlaceholder: 'Introduce una palabra o frase en chino (p. ej. 长 / 一带一路 / 我想去中国旅行。)',
+    searchPlaceholder: 'Introduce una palabra o frase en cualquier idioma (p. ej. 长 / happy / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
       'Introduce una palabra o frase en cualquier idioma (p. ej. happy / je suis fatigué / "Quiero viajar a China")',
     searchBtn: 'Buscar',
@@ -660,7 +660,7 @@ const DICT = {
 
   /* ─────────────────────────── German ─────────────────────────── */
   de: {
-    appTitle: 'Chinesisch-Schnellnachschlag für den Unterricht',
+    appTitle: 'Dictionary & Note',
     tabSearch: 'Suchen',
     tabHistory: 'Verlauf & Export',
 
@@ -683,7 +683,7 @@ const DICT = {
     classNamePlaceholder: 'Stundenname, z. B. Wirtschaftschinesisch 3',
     start: 'Start',
 
-    searchPlaceholder: 'Chinesisches Wort oder Satz eingeben (z. B. 长 / 一带一路 / 我想去中国旅行。)',
+    searchPlaceholder: 'Wort oder Satz in beliebiger Sprache eingeben (z. B. 长 / happy / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
       'Wort oder Satz in beliebiger Sprache eingeben (z. B. happy / je suis fatigué / "Ich möchte nach China reisen")',
     searchBtn: 'Suchen',
@@ -871,7 +871,7 @@ const DICT = {
 
   /* ─────────────────────────── French ─────────────────────────── */
   fr: {
-    appTitle: 'Recherche rapide de chinois pour la classe',
+    appTitle: 'Dictionary & Note',
     tabSearch: 'Recherche',
     tabHistory: 'Historique & export',
 
@@ -894,7 +894,7 @@ const DICT = {
     classNamePlaceholder: 'Nom du cours, p. ex. Chinois des affaires 3',
     start: 'Démarrer',
 
-    searchPlaceholder: 'Saisissez un mot ou une phrase en chinois (p. ex. 长 / 一带一路 / 我想去中国旅行。)',
+    searchPlaceholder: 'Saisissez un mot ou une phrase dans n’importe quelle langue (p. ex. 长 / happy / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
       'Saisissez un mot ou une phrase dans n’importe quelle langue (p. ex. happy / je suis fatigué / « Je veux voyager en Chine »)',
     searchBtn: 'Rechercher',
@@ -1082,7 +1082,7 @@ const DICT = {
 
   /* ─────────────────────────── Japanese ─────────────────────────── */
   ja: {
-    appTitle: '授業向け中国語クイック検索',
+    appTitle: 'Dictionary & Note',
     tabSearch: '検索',
     tabHistory: '履歴とエクスポート',
 
@@ -1105,7 +1105,7 @@ const DICT = {
     classNamePlaceholder: '授業名（例：ビジネス中国語 3）',
     start: '開始',
 
-    searchPlaceholder: '中国語の単語または文を入力（例：长 / 一带一路 / 我想去中国旅行。）',
+    searchPlaceholder: '任意の言語で単語または文を入力（例：长 / happy / 一带一路 / 我想去中国旅行。）',
     reverseSearchPlaceholder:
       '任意の言語の単語や文を入力（例：happy / je suis fatigué / 「中国に旅行したい」）',
     searchBtn: '検索',
@@ -1289,7 +1289,7 @@ const DICT = {
 
   /* ─────────────────────────── Korean ─────────────────────────── */
   ko: {
-    appTitle: '수업용 중국어 빠른 검색',
+    appTitle: 'Dictionary & Note',
     tabSearch: '검색',
     tabHistory: '기록 및 내보내기',
 
@@ -1312,7 +1312,7 @@ const DICT = {
     classNamePlaceholder: '수업 이름(예: 비즈니스 중국어 3)',
     start: '시작',
 
-    searchPlaceholder: '중국어 단어 또는 문장 입력(예: 长 / 一带一路 / 我想去中国旅行。)',
+    searchPlaceholder: '아무 언어로 단어 또는 문장 입력(예: 长 / happy / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
       '아무 언어로 단어나 문장을 입력하세요(예: happy / je suis fatigué / "중국에 여행 가고 싶어요")',
     searchBtn: '검색',
@@ -1496,7 +1496,7 @@ const DICT = {
 
   /* ─────────────────────────── Russian ─────────────────────────── */
   ru: {
-    appTitle: 'Быстрый поиск китайского для урока',
+    appTitle: 'Dictionary & Note',
     tabSearch: 'Поиск',
     tabHistory: 'История и экспорт',
 
@@ -1519,7 +1519,7 @@ const DICT = {
     classNamePlaceholder: 'Название урока, например «Деловой китайский 3»',
     start: 'Начать',
 
-    searchPlaceholder: 'Введите китайское слово или фразу (например, 长 / 一带一路 / 我想去中国旅行。)',
+    searchPlaceholder: 'Введите слово или фразу на любом языке (например, 长 / happy / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
       'Введите слово или фразу на любом языке (например, happy / je suis fatigué / «Хочу поехать в Китай»)',
     searchBtn: 'Найти',
@@ -1703,7 +1703,7 @@ const DICT = {
 
   /* ─────────────────────────── Arabic ─────────────────────────── */
   ar: {
-    appTitle: 'بحث سريع للصينية في الفصل',
+    appTitle: 'Dictionary & Note',
     tabSearch: 'بحث',
     tabHistory: 'السجل والتصدير',
 
@@ -1726,7 +1726,7 @@ const DICT = {
     classNamePlaceholder: 'اسم الدرس، مثل: الصينية للأعمال 3',
     start: 'ابدأ',
 
-    searchPlaceholder: 'أدخل كلمة أو جملة بالصينية (مثل 长 / 一带一路 / 我想去中国旅行。)',
+    searchPlaceholder: 'أدخل كلمة أو جملة بأي لغة (مثل 长 / happy / 一带一路 / 我想去中国旅行。)',
     reverseSearchPlaceholder:
       'أدخل كلمة أو جملة بأي لغة (مثل happy / je suis fatigué / «أريد السفر إلى الصين»)',
     searchBtn: 'بحث',

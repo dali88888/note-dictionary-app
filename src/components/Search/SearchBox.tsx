@@ -1,8 +1,33 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useDictStore } from '../../store/dictStore';
-import { PRESET_LANGUAGES, type TranslationDirection } from '../../types/dictionary';
+import {
+  PRESET_LANGUAGES,
+  type TranslationDirection,
+} from '../../types/dictionary';
 import { useT } from '../../i18n/useT';
 import { Button } from '../UI/Button';
+
+/**
+ * CJK Unified Ideographs ranges — used to auto-detect whether the
+ * user's input is Chinese (forward translate) or non-Chinese
+ * (reverse translate to Chinese).  Includes the BMP block
+ * (U+4E00–U+9FFF) and Extension A (U+3400–U+4DBF), which together
+ * cover modern simplified + traditional Chinese.  Pinyin alone
+ * ("ni hao") contains no Han characters and correctly routes to
+ * reverse mode, where the AI handles transliteration → candidates.
+ */
+const HAN_RE = /[一-鿿㐀-䶿]/u;
+
+/**
+ * Direction is no longer a user-facing toggle.  We pick it from the
+ * input itself: any Chinese character → forward (zh-to-other);
+ * otherwise → reverse (other-to-zh).  This matches "any language →
+ * any language" UX (Google Translate-style) — the user types and we
+ * route to the right prompt automatically.
+ */
+function detectDirection(input: string): TranslationDirection {
+  return HAN_RE.test(input) ? 'zh-to-other' : 'other-to-zh';
+}
 
 export function SearchBox() {
   const query = useDictStore((s) => s.query);
@@ -14,7 +39,6 @@ export function SearchBox() {
   const [word, setWord] = useState('');
   const [customOpen, setCustomOpen] = useState(false);
   const [customDraft, setCustomDraft] = useState('');
-  const [direction, setDirection] = useState<TranslationDirection>('zh-to-other');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isPreset = (PRESET_LANGUAGES as readonly string[]).includes(language);
@@ -34,7 +58,11 @@ export function SearchBox() {
     e.preventDefault();
     const trimmed = word.trim();
     if (!trimmed || loading) return;
-    query(trimmed, direction);
+    // Direction is auto-detected from the input.  When trimmed is
+    // pure Chinese, we translate INTO `language` (account preference);
+    // when it's another language, the target is implicitly Chinese
+    // and `language` is ignored downstream.
+    query(trimmed, detectDirection(trimmed));
   };
 
   // Submit on Enter, allow Shift+Enter for a newline.  Critically, also
@@ -46,7 +74,11 @@ export function SearchBox() {
     if (e.shiftKey) return;
     // `isComposing` is the standard signal; some browsers expose it on
     // the synthetic event, others only on the native event.
-    if (e.nativeEvent.isComposing || (e as unknown as { isComposing?: boolean }).isComposing) return;
+    if (
+      e.nativeEvent.isComposing ||
+      (e as unknown as { isComposing?: boolean }).isComposing
+    )
+      return;
     e.preventDefault();
     handleSubmit(e);
   };
@@ -61,52 +93,33 @@ export function SearchBox() {
     }
   };
 
-  const isReverse = direction === 'other-to-zh';
-
   return (
     <>
       <form onSubmit={handleSubmit} className="w-full max-w-2xl mx-auto">
-        {/* Direction toggle — segmented control */}
-        <div className="flex items-center justify-center gap-1 mb-3 p-1 bg-stone-100 rounded-lg w-fit mx-auto">
-          <button
-            type="button"
-            onClick={() => setDirection('zh-to-other')}
-            className={`px-3 py-1 text-sm rounded-md transition-colors ${
-              direction === 'zh-to-other'
-                ? 'bg-white text-stone-900 shadow-sm font-medium'
-                : 'text-stone-500 hover:text-stone-700'
-            }`}
-          >
-            {t('dirZhToOther')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setDirection('other-to-zh')}
-            className={`px-3 py-1 text-sm rounded-md transition-colors ${
-              direction === 'other-to-zh'
-                ? 'bg-white text-stone-900 shadow-sm font-medium'
-                : 'text-stone-500 hover:text-stone-700'
-            }`}
-          >
-            {t('dirOtherToZh')}
-          </button>
-        </div>
+        {/* Direction segmented control removed — input language is now
+            auto-detected (see detectDirection() above).  This collapses
+            the previous "zh→other / other→zh" tabbed UI into a single
+            "any language → any language" flow, à la Google Translate. */}
 
         <div className="flex items-start gap-2 flex-wrap sm:flex-nowrap">
           <textarea
             ref={textareaRef}
-            rows={1}
+            // Larger initial height (3 rows ≈ ~5 lines visible after
+            // line-height + padding) so the input feels like a "writing
+            // surface" rather than a single-line search box.  Auto-grows
+            // beyond this as the user types up to max-h.
+            rows={3}
             value={word}
             onChange={(e) => setWord(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={t(isReverse ? 'reverseSearchPlaceholder' : 'searchPlaceholder')}
+            placeholder={t('searchPlaceholder')}
             disabled={loading}
             className="flex-1 min-w-0 text-lg px-4 py-3 border border-stone-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent disabled:bg-stone-50 resize-none overflow-y-auto leading-relaxed max-h-[16rem]"
             autoFocus
           />
-          {/* The Submit button + language dropdown are top-aligned with
-              the textarea so they stay visually anchored as the textarea
-              grows.  `self-start` keeps them at the first line. */}
+          {/* Submit button + target-language dropdown.  `self-start`
+              keeps them anchored to the first textarea line as the
+              textarea grows for multi-line input. */}
           <Button
             type="submit"
             size="lg"
@@ -116,35 +129,32 @@ export function SearchBox() {
             {loading ? t('searchLoading') : t('searchBtn')}
           </Button>
 
-          {isReverse ? (
-            // Reverse mode: show static "→ Chinese" indicator (target is always Chinese)
-            <div className="self-start flex items-center px-3 py-2 border border-stone-300 rounded-lg bg-stone-50 text-sm text-stone-600 whitespace-nowrap">
-              {t('targetIsChinese')}
-            </div>
-          ) : (
-            // Forward mode: target-language picker (right of Search button).
-            // self-start keeps it pinned to the first textarea line as the
-            // textarea grows for multi-line input.
-            <div className="self-start flex items-center gap-1.5 px-3 py-2 border border-stone-300 rounded-lg bg-white">
-              <span className="text-sm text-stone-500 whitespace-nowrap">
-                {t('translateTo')}
-              </span>
-              <select
-                className="text-sm bg-transparent focus:outline-none"
-                value={isPreset ? language : '__other__'}
-                onChange={handleLangChange}
-              >
-                {PRESET_LANGUAGES.map((lang) => (
-                  <option key={lang} value={lang}>
-                    {lang}
-                  </option>
-                ))}
-                <option value="__other__">
-                  {isPreset ? t('otherLang') : t('otherLangWith', { value: language })}
+          {/* Target-language picker — always visible.  Active when the
+              input is Chinese (translate to <lang>); inert when input
+              is non-Chinese (target is implicitly Chinese, picker
+              setting is ignored).  Showing it unconditionally keeps
+              the layout stable across input changes. */}
+          <div className="self-start flex items-center gap-1.5 px-3 py-2 border border-stone-300 rounded-lg bg-white">
+            <span className="text-sm text-stone-500 whitespace-nowrap">
+              {t('translateTo')}
+            </span>
+            <select
+              className="text-sm bg-transparent focus:outline-none"
+              value={isPreset ? language : '__other__'}
+              onChange={handleLangChange}
+            >
+              {PRESET_LANGUAGES.map((lang) => (
+                <option key={lang} value={lang}>
+                  {lang}
                 </option>
-              </select>
-            </div>
-          )}
+              ))}
+              <option value="__other__">
+                {isPreset
+                  ? t('otherLang')
+                  : t('otherLangWith', { value: language })}
+              </option>
+            </select>
+          </div>
         </div>
 
         <p className="mt-2 text-xs text-stone-500">{t('searchHint')}</p>
@@ -167,8 +177,12 @@ export function SearchBox() {
             }}
             className="bg-white rounded-lg shadow-lg p-5 w-full max-w-sm"
           >
-            <h3 className="text-base font-semibold mb-2">{t('customLangTitle')}</h3>
-            <p className="text-sm text-stone-500 mb-3">{t('customLangHint')}</p>
+            <h3 className="text-base font-semibold mb-2">
+              {t('customLangTitle')}
+            </h3>
+            <p className="text-sm text-stone-500 mb-3">
+              {t('customLangHint')}
+            </p>
             <input
               autoFocus
               className="w-full border border-stone-300 rounded px-3 py-2 text-sm"

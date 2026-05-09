@@ -62,7 +62,10 @@ export function StudentSwitcher() {
           onClick={() => setOpen((o) => !o)}
           className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium transition-colors ${chipColor}`}
         >
-          <span className="text-xs opacity-70">{t('contextLabel')}</span>
+          {/* The "Context" prefix label has been removed per the user's
+              spec — the chip now just reads "Student: <name>" or "Myself"
+              and lets the visual styling (color + chevron) carry the
+              "this is a context selector" meaning. */}
           <span className="max-w-[10rem] truncate">{chipLabel}</span>
           <svg
             className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}
