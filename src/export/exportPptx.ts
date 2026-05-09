@@ -40,9 +40,20 @@ const FONT_LATIN = 'Calibri';
 /* ────────────────────────────────────────────────────────────────
  * Ruby (pinyin-above-hanzi) rendering
  *
- * Key fix: each character occupies a FIXED width (not stretched to
- * fill the available area). So a short sentence like "你好。" stays
- * naturally compact on the left edge, not spread across the whole slide.
+ * Each syllable lays out as a vertical pair: pinyin on top, hanzi
+ * below.  The *width* of each cell is the wider of the two — the
+ * hanzi (which is roughly square) or the pinyin string at the
+ * pinyin font size — so a long pinyin like "zhuāng" / "chuáng" /
+ * "shuāng" never overflows the cell width and wraps onto two
+ * rows above its hanzi.  Short syllables ("wǒ", "de") stay
+ * compact, and Latin-only spacers / CJK punctuation get smaller
+ * cells, which gives a natural rhythm of "tight inside a phrase,
+ * a little extra breathing room around punctuation/spaces" that
+ * the user asked for.
+ *
+ * Output is naturally LEFT-ALIGNED within the given bounds (or
+ * centered when opts.center is set).  Wrapping is by accumulated
+ * width, not by a fixed perRow count, since cells now vary.
  * ─────────────────────────────────────────────────────────────── */
 
 interface RubyStyle {
@@ -50,8 +61,14 @@ interface RubyStyle {
   hanziPt: number;
   /** Pinyin font-size in pt */
   pinyinPt: number;
-  /** Width per character cell, in inches. ~0.62 * (pt / 72) * 2 for CJK. */
-  charW: number;
+  /**
+   * Minimum / "default" width per character cell, in inches — used
+   * for hanzi that has no pinyin (CJK punctuation / latin run-ins).
+   * Long pinyin will widen its own cell beyond this; short syllables
+   * with this minimum are what gives the line a uniform Chinese-text
+   * rhythm where the pinyin allows it.
+   */
+  hanziCellW: number;
   /** Height of hanzi row, in inches */
   hanziH: number;
   /** Height of pinyin row, in inches (only used when showPinyin) */
@@ -60,12 +77,109 @@ interface RubyStyle {
 
 /** Reasonable defaults tuned so cells don't crop characters. */
 function rubyStyle(hanziPt: number, pinyinPt: number): RubyStyle {
-  // 1 pt ≈ 1/72 inch. CJK glyph is roughly square; allow 1.15x for breathing room.
-  const charW = (hanziPt / 72) * 1.15;
+  // 1 pt ≈ 1/72 inch. CJK glyph is roughly square; 1.05x of the pt
+  // size keeps adjacent hanzi cozy without cropping.  We tightened
+  // this from the previous 1.15x because the per-syllable width
+  // formula below now stretches cells dynamically when pinyin needs
+  // it — the old 1.15x was conservative padding to *try* to fit
+  // long pinyins, but it never went far enough and produced
+  // visibly-loose runs of short syllables.
+  const hanziCellW = (hanziPt / 72) * 1.05;
   // Row heights: line-height 1.35 for hanzi, 1.5 for pinyin.
   const hanziH = (hanziPt * 1.35) / 72;
   const pinyinH = (pinyinPt * 1.5) / 72;
-  return { hanziPt, pinyinPt, charW, hanziH, pinyinH };
+  return { hanziPt, pinyinPt, hanziCellW, hanziH, pinyinH };
+}
+
+/**
+ * Effective text width of an italic Latin string at `pt` font size,
+ * in inches.  Italic Calibri runs ~0.55em average per glyph; we add
+ * a small floor for very short strings (1–2 chars) where average-
+ * width formulas under-estimate.  Tuned empirically against the
+ * pinyin set we see in dictionary output (length 1–6 incl. tone marks).
+ */
+function pinyinTextW(text: string, pt: number): number {
+  if (!text) return 0;
+  const em = pt / 72;
+  // 0.6em per glyph leaves enough slack that the longest pinyins
+  // ("shuāng", "chuáng" — 6 codepoints incl. tone-marked vowel)
+  // fit even on builds where the renderer happens to use a slightly
+  // wider Latin font fallback.  Cheaper than measuring the actual
+  // glyph metrics and good enough for a layout that's discrete in
+  // 16-pt-cell increments anyway.
+  return text.length * em * 0.6;
+}
+
+/**
+ * Cell width for a single syllable.  Drives both layout (where the
+ * next cell starts) and wrap decisions.  Three cases:
+ *
+ *   • Whitespace-only hanzi (an explicit inter-word space like
+ *     " "): a thin gap, ~40% of the hanzi cell.  Doesn't waste
+ *     the full hanzi-cell width on what is visually nothing.
+ *   • Hanzi without pinyin (CJK punctuation, latin run-ins): the
+ *     baseline hanziCellW.
+ *   • Hanzi WITH pinyin: max(hanziCellW, pinyinTextW + pad).  The
+ *     padding (PINYIN_GAP) keeps adjacent pinyins from kissing
+ *     when several long ones land next to each other.
+ */
+const PINYIN_GAP = 0.04;
+
+function syllableCellW(s: Syllable, style: RubyStyle): number {
+  const hanzi = s.hanzi ?? '';
+  const pinyin = s.pinyin ?? '';
+
+  // Pure-whitespace cell: render as a small horizontal gap so an
+  // AI-supplied " " between words doesn't blow out into a full
+  // hanzi-cell-width void.  Floor at 0.05" so the gap is still
+  // visible.
+  if (hanzi && /^[\s　]+$/.test(hanzi)) {
+    return Math.max(0.05, style.hanziCellW * 0.4);
+  }
+
+  if (!pinyin) {
+    // CJK punctuation / latin / digit / empty hanzi — no pinyin,
+    // so the cell is just hanzi-sized.
+    return style.hanziCellW;
+  }
+
+  const pinyinW = pinyinTextW(pinyin, style.pinyinPt);
+  return Math.max(style.hanziCellW, pinyinW + PINYIN_GAP);
+}
+
+/**
+ * Wrap a syllable run into rows whose total cell-width sums fit
+ * within `maxRowW`.  Returns the rows and each row's cell-width
+ * array (so callers can skip a second pass over syllableCellW).
+ *
+ * A row always contains at least one syllable — even if that one
+ * syllable is wider than maxRowW (rare; would only happen for an
+ * absurd Latin run-in).  This avoids an infinite-loop edge case.
+ */
+interface PackedRow {
+  syllables: Syllable[];
+  cellWs: number[];
+  totalW: number;
+}
+function packRubyRows(
+  syllables: Syllable[],
+  style: RubyStyle,
+  maxRowW: number,
+): PackedRow[] {
+  const rows: PackedRow[] = [];
+  let cur: PackedRow = { syllables: [], cellWs: [], totalW: 0 };
+  for (const s of syllables) {
+    const w = syllableCellW(s, style);
+    if (cur.syllables.length > 0 && cur.totalW + w > maxRowW) {
+      rows.push(cur);
+      cur = { syllables: [], cellWs: [], totalW: 0 };
+    }
+    cur.syllables.push(s);
+    cur.cellWs.push(w);
+    cur.totalW += w;
+  }
+  if (cur.syllables.length > 0) rows.push(cur);
+  return rows;
 }
 
 /**
@@ -73,8 +187,8 @@ function rubyStyle(hanziPt: number, pinyinPt: number): RubyStyle {
  * Wraps onto multiple rows if it exceeds maxRowW. Returns the y coordinate
  * immediately BELOW the rendered block (caller advances from there).
  *
- * Characters are rendered with FIXED per-character column width, so the
- * output is naturally LEFT-ALIGNED within the given bounds.
+ * Cell widths are per-syllable (see syllableCellW) so long pinyins
+ * never wrap onto a second pinyin row, and short ones stay compact.
  */
 function addRuby(
   slide: PptxGenJS.Slide,
@@ -90,28 +204,27 @@ function addRuby(
   },
 ): number {
   const { style } = opts;
-  const perRow = Math.max(1, Math.floor(opts.maxRowW / style.charW));
-  const rows: Syllable[][] = [];
-  for (let i = 0; i < syllables.length; i += perRow) {
-    rows.push(syllables.slice(i, i + perRow));
-  }
+  const rows = packRubyRows(syllables, style, opts.maxRowW);
 
   let y = opts.y;
   const rowGap = 0.06;
 
   for (const row of rows) {
-    const rowW = row.length * style.charW;
     const rowX = opts.center
-      ? opts.x + (opts.maxRowW - rowW) / 2
+      ? opts.x + (opts.maxRowW - row.totalW) / 2
       : opts.x;
 
-    // pinyin row (optional)
+    // pinyin row (optional).  Compute each cell's x by summing the
+    // widths of preceding cells in the same row.  We render even
+    // empty pinyin to keep the row metrics honest (no-op in PPT).
     if (opts.showPinyin) {
-      row.forEach((s, i) => {
+      let cx = rowX;
+      row.syllables.forEach((s, i) => {
+        const w = row.cellWs[i];
         slide.addText(s.pinyin || '', {
-          x: rowX + i * style.charW,
+          x: cx,
           y,
-          w: style.charW,
+          w,
           h: style.pinyinH,
           fontSize: style.pinyinPt,
           fontFace: FONT_LATIN,
@@ -121,16 +234,19 @@ function addRuby(
           valign: 'bottom',
           margin: 0,
         });
+        cx += w;
       });
       y += style.pinyinH;
     }
 
     // hanzi row
-    row.forEach((s, i) => {
+    let cx = rowX;
+    row.syllables.forEach((s, i) => {
+      const w = row.cellWs[i];
       slide.addText(s.hanzi, {
-        x: rowX + i * style.charW,
+        x: cx,
         y,
-        w: style.charW,
+        w,
         h: style.hanziH,
         fontSize: style.hanziPt,
         fontFace: FONT_CJK,
@@ -139,6 +255,7 @@ function addRuby(
         valign: 'middle',
         margin: 0,
       });
+      cx += w;
     });
     y += style.hanziH + rowGap;
   }
@@ -184,8 +301,11 @@ function estimateRubyH(
   showPinyin: boolean,
   style: RubyStyle,
 ): number {
-  const perRow = Math.max(1, Math.floor(maxRowW / style.charW));
-  const rows = Math.ceil(syllables.length / perRow);
+  // Rows now have variable width (each cell sized by syllableCellW),
+  // so we can't divide-by-charW any more.  Re-use the same packer
+  // addRuby uses so the height we reserve matches the height we'll
+  // actually consume.
+  const rows = packRubyRows(syllables, style, maxRowW).length || 1;
   const perRowH = style.hanziH + (showPinyin ? style.pinyinH : 0) + 0.06;
   return rows * perRowH;
 }
