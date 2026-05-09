@@ -208,43 +208,55 @@ function addToAnonCache(
   return updated;
 }
 
-/**
- * Cloud cache hit: the user re-queried a word that already lives in
- * their library.  No AI call, no new entries row — but we still want
- * the lookup to count as part of today's session group and the active
- * manual class (so the user can export this query along with everything
- * else they did during that class).
+/* ─────────────── Optimistic UI + background persistence ───────────────
  *
- * Idempotent: if the entry is already linked to a session we don't
- * insert a duplicate row.
- */
-async function applyCloudCacheHit(opts: {
-  cached: DictionaryEntry;
+ * UX goal: the moment the AI hands us a translation, the user sees
+ * the result.  Saving it to Supabase (entries row + session linking)
+ * happens *after* the UI has already updated, in a background task.
+ *
+ * Why this matters: Supabase database writes occasionally hang
+ * indefinitely after the tab has been idle for a while (Chrome
+ * throttling leaves the SDK's fetch socket in a half-open state).
+ * Before this refactor, that hang manifested as "查询中…" forever
+ * because the spinner only cleared after the writes succeeded.  Now
+ * the spinner clears as soon as the AI returns, and the worst-case
+ * post-idle outcome is "this one query isn't in History; refresh
+ * to retry" instead of "the app appears frozen".
+ *
+ * Both helpers below are fire-and-forget: the caller `.catch()`s
+ * them to log a warning, but never propagates the error to the
+ * spinner or to the catch block in query() that would surface it
+ * to the user.
+ * ──────────────────────────────────────────────────────────────── */
+
+interface PersistContext {
   userId: string;
-  // The store's getState — used at the BOTTOM of this function to read
-  // the freshest sessions / managed-student context, instead of trusting
-  // a snapshot captured at the top.  See `mergeSessionsAfterQuery` and
-  // the comment in query() for why this matters: a parallel hydrate()
-  // can rewrite `sessions` between our read and our write.
-  getState: () => DictState;
+  managedStudentId: string | null;
+  activeManualSessionId: string | null;
+}
+
+/**
+ * Find or create today's auto session, then idempotently link
+ * `entryId` to it (and to the active manual class, if any).  Used
+ * by both the cache-miss persister and the cache-hit re-linker.
+ *
+ * Reads `sessions` from `getState()` at call time so a parallel
+ * hydrate() that landed during the wait doesn't get clobbered, and
+ * uses functional `setStore((state) => …)` for the same reason.
+ */
+async function attachEntryToTodaysSessions(
+  entryId: string,
+  ctx: PersistContext,
+  getState: () => DictState,
   setStore: (
     s:
       | Partial<DictState>
       | ((state: DictState) => Partial<DictState>),
-  ) => void;
-}): Promise<void> {
-  const { cached, userId, getState, setStore } = opts;
-
-  // Read CURRENT state so the linking decisions reflect any student
-  // switch / class-session change that happened while the L1 lookup
-  // was being decided.
-  const fresh0 = getState();
-  const currentManagedStudentId = fresh0.currentManagedStudentId;
-  const activeManualSessionId = fresh0.activeManualSessionId;
-  let updatedSessions = fresh0.sessions.slice();
-
-  // Find or create today's auto session (same logic as miss path).
+  ) => void,
+): Promise<void> {
   const todayKey = dateKey(Date.now());
+  let updatedSessions = getState().sessions.slice();
+
   let autoSession = updatedSessions.find(
     (s) => s.kind === 'auto' && s.name === todayKey,
   );
@@ -254,8 +266,8 @@ async function applyCloudCacheHit(opts: {
         supabase
           .from('class_sessions')
           .insert({
-            owner_user_id: userId,
-            managed_student_id: currentManagedStudentId,
+            owner_user_id: ctx.userId,
+            managed_student_id: ctx.managedStudentId,
             name: todayKey,
             kind: 'auto',
           })
@@ -263,52 +275,141 @@ async function applyCloudCacheHit(opts: {
           .select()
           .single(),
       SUPABASE_WRITE_TIMEOUT_MS,
-      'cache-hit/class_sessions.insert',
+      'persist/class_sessions.insert',
     );
     if (sessErr) throw sessErr;
     autoSession = sessionFromRow(sessRow as SessionRow, []);
     updatedSessions = [autoSession, ...updatedSessions];
   }
 
-  // Pick the sessions that *would* receive a new link (skip ones
-  // that already have this entry — duplicate inserts violate the
-  // session_entries primary key).
+  // Pick sessions that don't already have this entry (skip duplicates —
+  // session_entries has a unique PK that would reject them).
   const targetSessions: ClassSession[] = [];
-  if (!autoSession.entryIds.includes(cached.id)) targetSessions.push(autoSession);
+  if (!autoSession.entryIds.includes(entryId)) targetSessions.push(autoSession);
   if (
-    activeManualSessionId &&
-    activeManualSessionId !== autoSession.id
+    ctx.activeManualSessionId &&
+    ctx.activeManualSessionId !== autoSession.id
   ) {
-    const manual = updatedSessions.find((s) => s.id === activeManualSessionId);
-    if (manual && !manual.entryIds.includes(cached.id)) targetSessions.push(manual);
+    const manual = updatedSessions.find((s) => s.id === ctx.activeManualSessionId);
+    if (manual && !manual.entryIds.includes(entryId)) targetSessions.push(manual);
   }
 
   if (targetSessions.length > 0) {
     const links: SessionEntryRow[] = targetSessions.map((s) => ({
       session_id: s.id,
-      entry_id: cached.id,
+      entry_id: entryId,
     }));
     const { error: linkErr } = await withSupabaseTimeout(
       (signal) =>
         supabase.from('session_entries').insert(links).abortSignal(signal),
       SUPABASE_WRITE_TIMEOUT_MS,
-      'cache-hit/session_entries.insert',
+      'persist/session_entries.insert',
     );
     if (linkErr) throw linkErr;
-    // Mirror locally.
+
     const linkedIds = new Set(targetSessions.map((s) => s.id));
     updatedSessions = updatedSessions.map((s) =>
-      linkedIds.has(s.id) ? { ...s, entryIds: [...s.entryIds, cached.id] } : s,
+      linkedIds.has(s.id) ? { ...s, entryIds: [...s.entryIds, entryId] } : s,
     );
   }
 
   setStore((state) => ({
     sessions: mergeSessionsAfterQuery(state.sessions, updatedSessions),
+  }));
+}
+
+/**
+ * Persist a brand-new entry (cache miss) to the cloud: INSERT into
+ * `entries` (using the client-generated UUID we already showed the
+ * user), then attach to today's sessions.  Background task — caller
+ * doesn't await it.
+ */
+async function persistNewEntryToCloud(
+  entry: DictionaryEntry,
+  ctx: PersistContext,
+  getState: () => DictState,
+  setStore: (
+    s:
+      | Partial<DictState>
+      | ((state: DictState) => Partial<DictState>),
+  ) => void,
+): Promise<void> {
+  // 1. INSERT the entry.  We provide our own UUID — Postgres''s
+  //    `default gen_random_uuid()` only kicks in when no value is
+  //    sent.  This lets us show the entry in the UI before the
+  //    insert completes (the id is already known).
+  const { error: entryErr } = await withSupabaseTimeout(
+    (signal) =>
+      supabase
+        .from('entries')
+        .insert({
+          id: entry.id,
+          owner_user_id: ctx.userId,
+          managed_student_id: ctx.managedStudentId,
+          word: entry.word,
+          direction: entry.direction ?? 'zh-to-other',
+          language: entry.language,
+          word_syllables: entry.wordSyllables,
+          meanings: entry.meanings,
+        })
+        .abortSignal(signal),
+    SUPABASE_WRITE_TIMEOUT_MS,
+    'persist/entries.insert',
+  );
+  if (entryErr) throw entryErr;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[dictStore] persisted entry ${entry.id} word="${entry.word}" managed_student_id=${ctx.managedStudentId ?? 'null(self)'}`,
+  );
+
+  // 2. Attach to today's auto session + active manual class (if any).
+  await attachEntryToTodaysSessions(entry.id, ctx, getState, setStore);
+}
+
+/**
+ * Cache-hit path: show the cached entry RIGHT NOW (synchronously),
+ * then re-link it to today's session group in the background so a
+ * re-query during a class still includes it in that class's PPT
+ * export.  Any DB hang in the linker is logged but never blocks the
+ * UI — the result was already shown.
+ */
+function applyCloudCacheHit(opts: {
+  cached: DictionaryEntry;
+  userId: string;
+  getState: () => DictState;
+  setStore: (
+    s:
+      | Partial<DictState>
+      | ((state: DictState) => Partial<DictState>),
+  ) => void;
+}): void {
+  const { cached, userId, getState, setStore } = opts;
+
+  // 1. Synchronous state update — user sees the cached card the
+  //    moment we know it's a hit.  No await, no DB round-trip.
+  setStore({
     latestEntryId: cached.id,
     latestFromCache: true,
     loading: false,
     error: null,
-  }));
+  });
+
+  // 2. Re-link in the background.  Read context at firing time so
+  //    we use whichever student folder / manual class the user is
+  //    currently in.
+  const fresh = getState();
+  const ctx: PersistContext = {
+    userId,
+    managedStudentId: fresh.currentManagedStudentId,
+    activeManualSessionId: fresh.activeManualSessionId,
+  };
+  attachEntryToTodaysSessions(cached.id, ctx, getState, setStore).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[dictStore] background re-link failed for cached entry ${cached.id} (word="${cached.word}") — entry shown but today's session group may not include it until refresh:`,
+      err,
+    );
+  });
 }
 
 /**
@@ -1008,11 +1109,14 @@ export const useDictStore = create<DictState>()(
             // (if any), so re-querying a known word during a class
             // still includes it in that class's export.  Other than
             // that, no AI call and no new entries row.
-            await applyCloudCacheHit({
+            // applyCloudCacheHit now updates state synchronously and
+            // schedules the session re-linking in the background, so
+            // we don't `await` it.  The user sees the cached entry
+            // the instant we know it's a hit, regardless of how the
+            // DB write goes.
+            applyCloudCacheHit({
               cached,
               userId,
-              // Pass live store accessors so cache-hit re-linking uses
-              // the current student context, not the stale snapshot.
               getState: get,
               setStore: set,
             });
@@ -1064,127 +1168,71 @@ export const useDictStore = create<DictState>()(
             return;
           }
 
-          // ── Signed-in path: persist to Supabase ────────────────────
+          // ── Signed-in path: optimistic UI + background persist ─────
           //
-          // Re-read the LATEST currentManagedStudentId / activeManualSessionId
-          // here, NOT the snapshot taken at the top of query().  The AI
-          // call between the snapshot and this point can take 5–15 s,
-          // and during that time the user may have switched student
-          // folders or started/ended a manual class.  Using the snapshot
-          // would tag the new entry to whichever folder was active when
-          // the user clicked search, NOT where they ended up — that's
-          // the "我的词条没收录到该学生" bug user reported.
+          // Show the AI result IMMEDIATELY (synchronous setStore),
+          // then persist to Supabase as a fire-and-forget background
+          // task.  The user no longer waits on DB writes for the
+          // spinner to clear — so the post-idle "查询中…" forever
+          // failure mode (Supabase socket wedged, .insert() never
+          // resolves) is gone.  Worst case for that wedge now: this
+          // one query won't appear in History until the user
+          // refreshes and re-queries (which hits the global cache
+          // and saves cleanly under the fresh client).
+          //
+          // Re-read currentManagedStudentId / activeManualSessionId
+          // here (not from the top-of-function snapshot) so the
+          // entry is tagged to whichever folder the user ended up
+          // in after the AI call, in case they switched mid-wait.
           const fresh = get();
-          const targetManagedStudentId = fresh.currentManagedStudentId;
-          const targetActiveManualId = fresh.activeManualSessionId;
-          const targetSessions = fresh.sessions;
+          const ctx: PersistContext = {
+            userId,
+            managedStudentId: fresh.currentManagedStudentId,
+            activeManualSessionId: fresh.activeManualSessionId,
+          };
 
-          // 1. Insert the entry.  DB fills id + queried_at.
-          //    Wrapped in withSupabaseTimeout so a wedged Supabase
-          //    socket (common after the tab has been idle for a while)
-          //    can't keep us in "查询中" forever.
-          const { data: entryRow, error: entryErr } = await withSupabaseTimeout(
-            (signal) =>
-              supabase
-                .from('entries')
-                .insert({
-                  owner_user_id: userId,
-                  managed_student_id: targetManagedStudentId,
-                  word: data.word,
-                  direction,
-                  language,
-                  word_syllables: data.wordSyllables,
-                  meanings: data.meanings,
-                })
-                .abortSignal(signal)
-                .select()
-                .single(),
-            SUPABASE_WRITE_TIMEOUT_MS,
-            'query/entries.insert',
-          );
-          if (entryErr) throw entryErr;
-          const newEntry = entryFromRow(entryRow as EntryRow);
-          // eslint-disable-next-line no-console
-          console.log(
-            `[dictStore] inserted entry ${newEntry.id} word="${newEntry.word}" managed_student_id=${targetManagedStudentId ?? 'null(self)'}`,
-          );
+          // Generate the entry's UUID client-side.  Postgres's
+          // `default gen_random_uuid()` only fires when no value is
+          // sent, so providing one lets us show the card before the
+          // INSERT round-trip completes — the id is already known
+          // and stable across the optimistic-render and the actual
+          // DB row.
+          const newEntryId =
+            typeof crypto !== 'undefined' && 'randomUUID' in crypto
+              ? crypto.randomUUID()
+              : `c-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-          // 2. Find or create today's auto session in the LATEST sessions.
-          const todayKey = dateKey(newEntry.queriedAt);
-          let autoSession = targetSessions.find(
-            (s) => s.kind === 'auto' && s.name === todayKey,
-          );
-          let updatedSessions = targetSessions.slice();
-          if (!autoSession) {
-            const { data: sessRow, error: sessErr } = await withSupabaseTimeout(
-              (signal) =>
-                supabase
-                  .from('class_sessions')
-                  .insert({
-                    owner_user_id: userId,
-                    managed_student_id: targetManagedStudentId,
-                    name: todayKey,
-                    kind: 'auto',
-                  })
-                  .abortSignal(signal)
-                  .select()
-                  .single(),
-              SUPABASE_WRITE_TIMEOUT_MS,
-              'query/class_sessions.insert',
-            );
-            if (sessErr) throw sessErr;
-            autoSession = sessionFromRow(sessRow as SessionRow, []);
-            updatedSessions = [autoSession, ...updatedSessions];
-          }
+          const newEntry: DictionaryEntry = {
+            id: newEntryId,
+            direction,
+            word: data.word,
+            wordSyllables: data.wordSyllables,
+            language,
+            meanings: data.meanings,
+            queriedAt: Date.now(),
+          };
 
-          // 3. Link entry to auto session (and to manual if active).
-          const linksToInsert: SessionEntryRow[] = [
-            { session_id: autoSession.id, entry_id: newEntry.id },
-          ];
-          if (
-            targetActiveManualId &&
-            targetActiveManualId !== autoSession.id &&
-            updatedSessions.some((s) => s.id === targetActiveManualId)
-          ) {
-            linksToInsert.push({
-              session_id: targetActiveManualId,
-              entry_id: newEntry.id,
-            });
-          }
-          const { error: linkErr } = await withSupabaseTimeout(
-            (signal) =>
-              supabase
-                .from('session_entries')
-                .insert(linksToInsert)
-                .abortSignal(signal),
-            SUPABASE_WRITE_TIMEOUT_MS,
-            'query/session_entries.insert',
-          );
-          if (linkErr) throw linkErr;
-
-          // 4. Mirror locally — use the FRESHEST `entries` map at the
-          // moment of write via the functional setter.  Otherwise a
-          // background hydrate (e.g. one that was triggered by a student
-          // switch during the AI call) could land between our snapshot
-          // and this set, and we'd clobber its entries with our stale copy.
-          const linkedSessionIds = new Set(linksToInsert.map((l) => l.session_id));
-          updatedSessions = updatedSessions.map((s) =>
-            linkedSessionIds.has(s.id)
-              ? { ...s, entryIds: [...s.entryIds, newEntry.id] }
-              : s,
-          );
-
+          // 1. SHOW IMMEDIATELY.  Spinner clears, ResultCard renders.
           set((state) => ({
-            entries: { ...state.entries, [newEntry.id]: newEntry },
-            // Merge our updated sessions back over fresh state — but
-            // keep any sessions that arrived via hydrate that we didn't
-            // know about.  Build a map for this.
-            sessions: mergeSessionsAfterQuery(state.sessions, updatedSessions),
-            latestEntryId: newEntry.id,
+            entries: { ...state.entries, [newEntryId]: newEntry },
+            latestEntryId: newEntryId,
             latestFromCache: serverCacheHit,
             loading: false,
             error: null,
           }));
+
+          // 2. PERSIST IN BACKGROUND.  Fire-and-forget — `.catch()`
+          //    swallows wedge/timeout errors and just logs them.
+          //    The user already has their result; the cost of a
+          //    failure here is "missing from History this one
+          //    time", not "app appears frozen".
+          persistNewEntryToCloud(newEntry, ctx, get, set).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[dictStore] background persist failed for entry ${newEntryId} (word="${newEntry.word}") — result is shown but not saved to cloud (refresh + re-query to retry):`,
+              err,
+            );
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           // eslint-disable-next-line no-console
