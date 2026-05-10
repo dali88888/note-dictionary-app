@@ -77,6 +77,14 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Detected: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Query failed: ${v.msg}`,
+    pendingPersistsCount: (v: Vars) =>
+      Number(v.n) === 1
+        ? '1 query waiting to sync'
+        : `${v.n} queries waiting to sync`,
+    pendingPersistsRetry: 'Retry now',
+    pendingPersistsDiscard: 'Discard',
+    pendingPersistsDiscardConfirm:
+      'Discard unsaved queries? This is permanent and the data is not in the cloud.',
     emptyHint:
       'Enter a Chinese word above to start. Queries are auto-archived by date and can be exported as PPT after class.',
     emptyHintReverse:
@@ -287,6 +295,11 @@ const DICT = {
     detectedLanguage: (v: Vars) => `检测语言：${v.lang}`,
 
     queryFailed: (v: Vars) => `查询失败：${v.msg}`,
+    pendingPersistsCount: (v: Vars) => `${v.n} 条查询尚未同步到云端`,
+    pendingPersistsRetry: '立即重试',
+    pendingPersistsDiscard: '丢弃',
+    pendingPersistsDiscardConfirm:
+      '确定丢弃这些未保存的查询吗？此操作不可撤销，数据并未保存到云端。',
     emptyHint: '在上方输入中文词开始查询。所有查询会自动按日期归档，课后可导出为 PPT。',
     emptyHintReverse: '在上方输入任意语言的词或句子，系统会给出地道的中文表达。',
 
@@ -487,6 +500,14 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Detectado: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Búsqueda fallida: ${v.msg}`,
+    pendingPersistsCount: (v: Vars) =>
+      Number(v.n) === 1
+        ? '1 consulta pendiente de sincronización'
+        : `${v.n} consultas pendientes de sincronización`,
+    pendingPersistsRetry: 'Reintentar ahora',
+    pendingPersistsDiscard: 'Descartar',
+    pendingPersistsDiscardConfirm:
+      '¿Descartar consultas no guardadas? Esto es permanente — los datos no están en la nube.',
     emptyHint:
       'Introduce una palabra china arriba para empezar. Las búsquedas se archivan por fecha y se pueden exportar a PPT.',
     emptyHintReverse:
@@ -698,6 +719,14 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Erkannt: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Suche fehlgeschlagen: ${v.msg}`,
+    pendingPersistsCount: (v: Vars) =>
+      Number(v.n) === 1
+        ? '1 Abfrage wartet auf Synchronisierung'
+        : `${v.n} Abfragen warten auf Synchronisierung`,
+    pendingPersistsRetry: 'Jetzt erneut versuchen',
+    pendingPersistsDiscard: 'Verwerfen',
+    pendingPersistsDiscardConfirm:
+      'Nicht gespeicherte Abfragen verwerfen? Dies ist endgültig — die Daten sind nicht in der Cloud.',
     emptyHint:
       'Geben Sie oben ein chinesisches Wort ein. Suchen werden automatisch nach Datum archiviert und können nach der Stunde als PPT exportiert werden.',
     emptyHintReverse:
@@ -909,6 +938,14 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Détecté : ${v.lang}`,
 
     queryFailed: (v: Vars) => `Échec de la recherche : ${v.msg}`,
+    pendingPersistsCount: (v: Vars) =>
+      Number(v.n) === 1
+        ? '1 requête en attente de synchronisation'
+        : `${v.n} requêtes en attente de synchronisation`,
+    pendingPersistsRetry: 'Réessayer maintenant',
+    pendingPersistsDiscard: 'Abandonner',
+    pendingPersistsDiscardConfirm:
+      'Abandonner les requêtes non enregistrées ? Action irréversible — les données ne sont pas dans le cloud.',
     emptyHint:
       'Saisissez un mot chinois ci-dessus pour commencer. Les recherches sont archivées automatiquement par date et exportables en PPT après le cours.',
     emptyHintReverse:
@@ -1120,6 +1157,11 @@ const DICT = {
     detectedLanguage: (v: Vars) => `検出：${v.lang}`,
 
     queryFailed: (v: Vars) => `検索失敗：${v.msg}`,
+    pendingPersistsCount: (v: Vars) => `${v.n} 件のクエリが同期待ち`,
+    pendingPersistsRetry: '今すぐ再試行',
+    pendingPersistsDiscard: '破棄',
+    pendingPersistsDiscardConfirm:
+      '未保存のクエリを破棄しますか？取り消せません — データはクラウドに保存されていません。',
     emptyHint:
       '上に中国語の単語を入力してください。検索は日付ごとに自動アーカイブされ、授業後に PPT としてエクスポートできます。',
     emptyHintReverse:
@@ -1327,6 +1369,11 @@ const DICT = {
     detectedLanguage: (v: Vars) => `감지됨: ${v.lang}`,
 
     queryFailed: (v: Vars) => `검색 실패: ${v.msg}`,
+    pendingPersistsCount: (v: Vars) => `동기화 대기 중인 검색 ${v.n}건`,
+    pendingPersistsRetry: '지금 다시 시도',
+    pendingPersistsDiscard: '버리기',
+    pendingPersistsDiscardConfirm:
+      '저장되지 않은 검색을 버리시겠습니까? 되돌릴 수 없으며 데이터는 클라우드에 없습니다.',
     emptyHint:
       '위에 중국어 단어를 입력해 시작하세요. 검색은 날짜별로 자동 보관되며 수업 후 PPT로 내보낼 수 있습니다.',
     emptyHintReverse:
@@ -1534,6 +1581,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Определён: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Ошибка поиска: ${v.msg}`,
+    pendingPersistsCount: (v: Vars) =>
+      `Запросов в очереди на синхронизацию: ${v.n}`,
+    pendingPersistsRetry: 'Повторить сейчас',
+    pendingPersistsDiscard: 'Удалить',
+    pendingPersistsDiscardConfirm:
+      'Удалить несохранённые запросы? Это безвозвратно — данные не загружены в облако.',
     emptyHint:
       'Введите китайское слово выше, чтобы начать. Поисковые запросы автоматически архивируются по дате и могут быть экспортированы в PPT после урока.',
     emptyHintReverse:
@@ -1741,6 +1794,11 @@ const DICT = {
     detectedLanguage: (v: Vars) => `تم اكتشاف: ${v.lang}`,
 
     queryFailed: (v: Vars) => `فشل البحث: ${v.msg}`,
+    pendingPersistsCount: (v: Vars) => `${v.n} استعلامات في انتظار المزامنة`,
+    pendingPersistsRetry: 'إعادة المحاولة الآن',
+    pendingPersistsDiscard: 'تجاهل',
+    pendingPersistsDiscardConfirm:
+      'تجاهل الاستعلامات غير المحفوظة؟ هذا الإجراء نهائي — البيانات ليست في السحابة.',
     emptyHint:
       'أدخل كلمة بالصينية أعلاه للبدء. تتم أرشفة الاستعلامات تلقائيًا حسب التاريخ ويمكن تصديرها كـ PPT بعد الدرس.',
     emptyHintReverse:

@@ -250,6 +250,28 @@ interface PersistContext {
 }
 
 /**
+ * One queued retry of a background-persist that failed.  Stored in
+ * `state.pendingPersists` (keyed by entry.id) and persisted to
+ * localStorage so it survives tab reloads.  Re-played on the next
+ * hydrate via `flushPendingPersists`.
+ *
+ * `entry` carries the full payload (word, syllables, meanings,
+ * queriedAt) so we can re-issue a complete UPSERT without needing
+ * to re-call the AI.  `ctx` carries the user/student/session
+ * context that was active when the original persist was attempted —
+ * we replay against THAT context, not whichever student is current
+ * at retry time, so a teacher who switched folders between sessions
+ * doesn't mis-tag yesterday's queries.
+ */
+export interface PendingPersist {
+  entry: DictionaryEntry;
+  ctx: PersistContext;
+  enqueuedAt: number;
+  attempts: number;
+  lastError?: string;
+}
+
+/**
  * Find or create today's auto session, then idempotently link
  * `entryId` to it (and to the active manual class, if any).  Used
  * by both the cache-miss persister and the cache-hit re-linker.
@@ -267,8 +289,15 @@ async function attachEntryToTodaysSessions(
       | Partial<DictState>
       | ((state: DictState) => Partial<DictState>),
   ) => void,
+  /**
+   * Optional override for the date key.  Defaults to "now"; the
+   * pending-persist retry path passes the entry's original queriedAt
+   * so that retried entries land in the auto session of the day they
+   * were originally queried, not the day the retry happened.
+   */
+  asOfTs: number = Date.now(),
 ): Promise<void> {
-  const todayKey = dateKey(Date.now());
+  const todayKey = dateKey(asOfTs);
   let updatedSessions = getState().sessions.slice();
 
   let autoSession = updatedSessions.find(
@@ -333,10 +362,17 @@ async function attachEntryToTodaysSessions(
 }
 
 /**
- * Persist a brand-new entry (cache miss) to the cloud: INSERT into
+ * Persist a brand-new entry (cache miss) to the cloud: UPSERT into
  * `entries` (using the client-generated UUID we already showed the
  * user), then attach to today's sessions.  Background task — caller
  * doesn't await it.
+ *
+ * UPSERT (not bare INSERT) so that a retry from the pending-persist
+ * queue is idempotent.  The original attempt may have actually
+ * succeeded server-side and we just lost the response (timeout /
+ * tab idle / network blip), in which case a bare INSERT would 409
+ * and the entry would never get out of the queue.  Upserting on
+ * `id` simply overwrites with the same payload — safe.
  */
 async function persistNewEntryToCloud(
   entry: DictionaryEntry,
@@ -348,15 +384,16 @@ async function persistNewEntryToCloud(
       | ((state: DictState) => Partial<DictState>),
   ) => void,
 ): Promise<void> {
-  // 1. INSERT the entry.  We provide our own UUID — Postgres''s
+  // 1. UPSERT the entry.  We provide our own UUID — Postgres's
   //    `default gen_random_uuid()` only kicks in when no value is
   //    sent.  This lets us show the entry in the UI before the
-  //    insert completes (the id is already known).
+  //    upsert completes (the id is already known) and lets retries
+  //    be idempotent.
   const { error: entryErr } = await withSupabaseTimeout(
     (signal) =>
       supabase
         .from('entries')
-        .insert({
+        .upsert({
           id: entry.id,
           owner_user_id: ctx.userId,
           managed_student_id: ctx.managedStudentId,
@@ -365,10 +402,13 @@ async function persistNewEntryToCloud(
           language: entry.language,
           word_syllables: entry.wordSyllables,
           meanings: entry.meanings,
+          // Preserve the original query timestamp on retries so the
+          // entry sorts to its real position in History, not to "now".
+          queried_at: new Date(entry.queriedAt).toISOString(),
         })
         .abortSignal(signal),
     SUPABASE_WRITE_TIMEOUT_MS,
-    'persist/entries.insert',
+    'persist/entries.upsert',
   );
   if (entryErr) throw entryErr;
   // eslint-disable-next-line no-console
@@ -377,7 +417,16 @@ async function persistNewEntryToCloud(
   );
 
   // 2. Attach to today's auto session + active manual class (if any).
-  await attachEntryToTodaysSessions(entry.id, ctx, getState, setStore);
+  //    Use the entry's original queriedAt to figure out the date key,
+  //    not Date.now() — a retry the next morning should still go into
+  //    the YESTERDAY's auto session, not today's.
+  await attachEntryToTodaysSessions(
+    entry.id,
+    ctx,
+    getState,
+    setStore,
+    entry.queriedAt,
+  );
 }
 
 /**
@@ -679,6 +728,28 @@ interface DictState {
    */
   anonCache: Record<string, DictionaryEntry>;
 
+  /**
+   * Persistence-failure recovery queue.  When a background save (the
+   * optimistic UI flow's `persistNewEntryToCloud` / `attachEntry…`)
+   * fails — e.g. Supabase SDK socket wedged after long idle, network
+   * drop, expired auth token — the entry's full payload + persist
+   * context is enqueued here instead of being silently lost.
+   *
+   * Persisted to localStorage (see `partialize` below) so a tab close
+   * or browser crash between the optimistic UI render and the cloud
+   * write doesn't lose data.  On hydrate (and on every fresh sign-in)
+   * we attempt to flush the queue via UPSERT, which is idempotent
+   * even if the original attempt actually succeeded server-side and
+   * we just lost the response.
+   *
+   * The UI surfaces a banner whenever this map is non-empty so the
+   * user sees "X queries waiting to sync" instead of finding out
+   * after the fact that their lesson didn't save.
+   *
+   * Keyed by entry.id.
+   */
+  pendingPersists: Record<string, PendingPersist>;
+
   /** Transient. */
   latestEntryId: string | null;
   /**
@@ -743,6 +814,29 @@ interface DictState {
   setShowPinyin: (v: boolean) => void;
   setStudentSort: (key: StudentSortKey, dir: StudentSortDir) => void;
 
+  /**
+   * Try to UPSERT every queued pending-persist back to Supabase.  Each
+   * successful round-trip removes its entry from the queue and merges
+   * it into the local `entries` map (in case the user reloaded the
+   * tab and lost the optimistic-UI in-memory copy).  Errors keep the
+   * entry queued for the next attempt.
+   *
+   * Called automatically:
+   *   • after every successful hydrate
+   *   • on demand when the user clicks "Retry" in the unsaved-queries
+   *     banner
+   */
+  flushPendingPersists: () => Promise<void>;
+
+  /**
+   * Drop every queued pending-persist.  Used by the banner's "Discard"
+   * button when the user has decided the unsaved data isn't worth
+   * keeping (e.g. they exported a PPT already and don't care if the
+   * cloud row goes missing).  Wiped silently — caller is expected to
+   * confirm with the user first.
+   */
+  discardPendingPersists: () => void;
+
   collectEntries: (sessionIds: string[]) => DictionaryEntry[];
 }
 
@@ -769,6 +863,7 @@ export const useDictStore = create<DictState>()(
       managedStudents: [],
       hydrated: false,
       anonCache: {},
+      pendingPersists: {},
       latestEntryId: null,
       latestFromCache: false,
       loading: false,
@@ -898,6 +993,15 @@ export const useDictStore = create<DictState>()(
             hydrated: true,
             error: null,
           });
+
+          // Replay any persists that failed during the previous
+          // session — the user may have lost their tab between an
+          // optimistic-UI render and the cloud write.  This is a
+          // fire-and-forget background task; failures are logged
+          // and the queue stays for the next sign-in / reload.
+          // Important: kicked off AFTER `hydrated: true` so the UI
+          // can already paint while the upserts run in the back.
+          void get().flushPendingPersists();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           // eslint-disable-next-line no-console
@@ -1350,17 +1454,32 @@ export const useDictStore = create<DictState>()(
             error: null,
           }));
 
-          // 2. PERSIST IN BACKGROUND.  Fire-and-forget — `.catch()`
-          //    swallows wedge/timeout errors and just logs them.
-          //    The user already has their result; the cost of a
-          //    failure here is "missing from History this one
-          //    time", not "app appears frozen".
+          // 2. PERSIST IN BACKGROUND.  On failure, instead of silently
+          //    swallowing the error (which is what caused the lost-
+          //    lesson-data bug — a teacher's whole class never landed
+          //    in the cloud), we ENQUEUE the entry for retry and let
+          //    the UI banner surface it to the user.  The pending
+          //    queue lives in localStorage so even a tab close before
+          //    retry doesn't lose data.
           persistNewEntryToCloud(newEntry, ctx, get, set).catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
             // eslint-disable-next-line no-console
             console.warn(
-              `[dictStore] background persist failed for entry ${newEntryId} (word="${newEntry.word}") — result is shown but not saved to cloud (refresh + re-query to retry):`,
+              `[dictStore] background persist failed for entry ${newEntryId} (word="${newEntry.word}") — enqueued for retry:`,
               err,
             );
+            set((state) => ({
+              pendingPersists: {
+                ...state.pendingPersists,
+                [newEntryId]: {
+                  entry: newEntry,
+                  ctx,
+                  enqueuedAt: Date.now(),
+                  attempts: 1,
+                  lastError: msg,
+                },
+              },
+            }));
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -1565,6 +1684,81 @@ export const useDictStore = create<DictState>()(
         }));
       },
 
+      /* ─────────── pending-persist recovery ─────────── */
+
+      flushPendingPersists: async () => {
+        // Snapshot the queue at call-time.  We iterate over this
+        // snapshot rather than the live state so concurrent enqueues
+        // (a fresh failure from the user typing a new word while we
+        // retry) don't get processed twice.
+        const queue = Object.values(get().pendingPersists);
+        if (queue.length === 0) return;
+
+        // Verify auth before starting — a flush attempted without a
+        // signed-in user would fail every row with the same RLS
+        // rejection.  If the session is gone, leave the queue intact
+        // for the next sign-in.
+        const userId = await getCurrentUserId();
+        if (!userId) return;
+
+        for (const pending of queue) {
+          // If the user signed in as a different account since the
+          // entry was queued, skip it — replaying under the wrong
+          // owner_user_id would either fail RLS or worse, succeed
+          // and silently misfile data.  Leave it in the queue for
+          // later (the original user might sign back in).
+          if (pending.ctx.userId !== userId) continue;
+          try {
+            await persistNewEntryToCloud(pending.entry, pending.ctx, get, set);
+            // Success — drop from queue and ensure the entry is in
+            // the in-memory map (covers the "tab reloaded after
+            // failure" recovery case where the optimistic-UI copy
+            // is already gone).
+            set((state) => {
+              const next = { ...state.pendingPersists };
+              delete next[pending.entry.id];
+              return {
+                pendingPersists: next,
+                entries: state.entries[pending.entry.id]
+                  ? state.entries
+                  : { ...state.entries, [pending.entry.id]: pending.entry },
+              };
+            });
+            // eslint-disable-next-line no-console
+            console.log(
+              `[dictStore] pending-persist replayed: word="${pending.entry.word}"`,
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[dictStore] pending-persist retry still failing for word="${pending.entry.word}":`,
+              err,
+            );
+            // Bump attempt counter + record latest error so the UI
+            // can show progress / staleness.
+            set((state) => {
+              const cur = state.pendingPersists[pending.entry.id];
+              if (!cur) return state;
+              return {
+                pendingPersists: {
+                  ...state.pendingPersists,
+                  [pending.entry.id]: {
+                    ...cur,
+                    attempts: cur.attempts + 1,
+                    lastError: msg,
+                  },
+                },
+              };
+            });
+          }
+        }
+      },
+
+      discardPendingPersists: () => {
+        set({ pendingPersists: {} });
+      },
+
       /* ─────────── derived helpers ─────────── */
 
       collectEntries: (sessionIds) => {
@@ -1593,6 +1787,11 @@ export const useDictStore = create<DictState>()(
         // MAX_ANON_CACHE_ENTRIES (~200) so the localStorage payload
         // stays well under a megabyte.
         anonCache: s.anonCache,
+        // Pending-persist queue MUST live in localStorage so a tab
+        // close between the optimistic-UI render and the cloud write
+        // doesn't lose data — that's the whole point of the queue.
+        // Replayed on the next hydrate via flushPendingPersists.
+        pendingPersists: s.pendingPersists,
       }),
       merge: (persistedState, currentState) => {
         const p = persistedState as Partial<DictState> | undefined;
@@ -1601,6 +1800,7 @@ export const useDictStore = create<DictState>()(
           prefs: { ...currentState.prefs, ...(p?.prefs ?? {}) },
           currentManagedStudentId: p?.currentManagedStudentId ?? null,
           anonCache: p?.anonCache ?? {},
+          pendingPersists: p?.pendingPersists ?? {},
         };
       },
     },

@@ -5,6 +5,7 @@ import { HistoryView } from './components/History/HistoryView';
 import { AuthGate } from './components/Auth/AuthGate';
 import { AuthModal } from './components/Auth/AuthModal';
 import { LegacyImportDialog } from './components/Auth/LegacyImportDialog';
+import { PendingPersistsBanner } from './components/Common/PendingPersistsBanner';
 import { useAuth } from './auth/AuthContext';
 import {
   useDictStore,
@@ -80,6 +81,10 @@ export default function App() {
     <AuthGate>
       <div className="min-h-screen">
         <TopBar view={view} onChangeView={setView} />
+        {/* Sits between TopBar and main content so it's visible no
+            matter which view (Lookup / History) the user is on, and
+            so they see it the moment they return to the tab. */}
+        <PendingPersistsBanner />
         <main>
           {view === 'search' ? <SearchView /> : <HistoryView />}
         </main>
