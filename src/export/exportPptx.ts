@@ -76,7 +76,7 @@ interface RubyStyle {
 }
 
 /** Reasonable defaults tuned so cells don't crop characters. */
-function rubyStyle(hanziPt: number, pinyinPt: number): RubyStyle {
+export function rubyStyle(hanziPt: number, pinyinPt: number): RubyStyle {
   // 1 pt ≈ 1/72 inch. CJK glyph is roughly square; 1.05x of the pt
   // size keeps adjacent hanzi cozy without cropping.  We tightened
   // this from the previous 1.15x because the per-syllable width
@@ -98,7 +98,7 @@ function rubyStyle(hanziPt: number, pinyinPt: number): RubyStyle {
  * width formulas under-estimate.  Tuned empirically against the
  * pinyin set we see in dictionary output (length 1–6 incl. tone marks).
  */
-function pinyinTextW(text: string, pt: number): number {
+export function pinyinTextW(text: string, pt: number): number {
   if (!text) return 0;
   const em = pt / 72;
   // 0.6em per glyph leaves enough slack that the longest pinyins
@@ -125,7 +125,7 @@ function pinyinTextW(text: string, pt: number): number {
  */
 const PINYIN_GAP = 0.04;
 
-function syllableCellW(s: Syllable, style: RubyStyle): number {
+export function syllableCellW(s: Syllable, style: RubyStyle): number {
   const hanzi = s.hanzi ?? '';
   const pinyin = s.pinyin ?? '';
 

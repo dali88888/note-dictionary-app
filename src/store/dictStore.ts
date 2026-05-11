@@ -33,6 +33,7 @@ import { translateWord } from '../api/translateClient';
 import type { UILang } from '../i18n';
 import { supabase, withTimeout } from '../auth/supabaseClient';
 import type { ManagedStudent } from '../auth/types';
+import { withSupabaseTimeout } from './withSupabaseTimeout';
 
 const DEFAULT_LANGUAGE = 'English';
 const DEFAULT_UI_LANG: UILang = 'en';
@@ -536,6 +537,15 @@ function applyCloudCacheHit(opts: {
 }
 
 /**
+ * NOTE: withSupabaseTimeout has been extracted to its own file
+ * (./withSupabaseTimeout.ts) so it can be unit-tested in isolation,
+ * without dragging in the supabase client / Zustand store / browser
+ * globals.  The previous inline JSDoc is preserved here as historical
+ * context — see that file for the current implementation and its
+ * regression test (withSupabaseTimeout.test.ts).
+ *
+ * Old inline comment:
+ *
  * Wrap a Supabase query builder call in an AbortController so it can't
  * hang forever.  Field-reported failure mode: after the tab has been
  * idle for a while, `supabase.from(...).insert(...)` sometimes never
@@ -556,51 +566,7 @@ function applyCloudCacheHit(opts: {
  * call site readable (`.abortSignal(signal)` is just one extra link
  * in the chain) without losing the type information.
  */
-async function withSupabaseTimeout<T>(
-  build: (signal: AbortSignal) => PromiseLike<T>,
-  ms: number,
-  label: string,
-): Promise<T> {
-  // ⚠️ Field-reported data loss: in some wedge states (long-idle tab
-  // after Chrome throttling) supabase-js's fetch IGNORES the abort
-  // signal and the await never resolves OR rejects.  The earlier
-  // implementation here only called `controller.abort()` and trusted
-  // the SDK to bubble that up — which fails silently for entire
-  // teaching sessions, because the .catch() in dictStore.query never
-  // fires and nothing reaches pendingPersists.  No banner, no retry,
-  // user discovers the loss the next day when the PPT export is
-  // empty.
-  //
-  // Fix: race the SDK call against an independent timer that ALWAYS
-  // rejects after `ms`.  The abort() is still fired (helps the
-  // well-behaved path) but the rejection no longer depends on the
-  // SDK respecting it.  Worst case the SDK eventually does respond
-  // after we've already rejected — its result is then discarded
-  // harmlessly.
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race<T>([
-      build(controller.signal) as Promise<T>,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => {
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[dictStore] ${label} timed out after ${ms}ms — supabase-js wedged; rejecting independent of abort`,
-          );
-          controller.abort();
-          reject(
-            new Error(
-              `${label} timed out after ${ms}ms (Supabase write wedged)`,
-            ),
-          );
-        }, ms);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
+// (withSupabaseTimeout is imported at the top — see ./withSupabaseTimeout.ts)
 
 const SUPABASE_WRITE_TIMEOUT_MS = 10_000;
 
