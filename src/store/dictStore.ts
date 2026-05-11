@@ -504,13 +504,35 @@ function applyCloudCacheHit(opts: {
     managedStudentId: fresh.currentManagedStudentId,
     activeManualSessionId: fresh.activeManualSessionId,
   };
-  attachEntryToTodaysSessions(cached.id, ctx, getState, setStore).catch((err) => {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[dictStore] background re-link failed for cached entry ${cached.id} (word="${cached.word}") — entry shown but today's session group may not include it until refresh:`,
-      err,
-    );
-  });
+  attachEntryToTodaysSessions(cached.id, ctx, getState, setStore).catch(
+    (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[dictStore] background re-link failed for cached entry ${cached.id} (word="${cached.word}") — enqueuing for retry:`,
+        err,
+      );
+      // ⚠️ Earlier this only logged — which silently dropped the
+      // "By date" linkage for ANY cache-hit query during a wedged
+      // session.  Now we enqueue so the banner surfaces it and
+      // flushPendingPersists retries on the next reload.  On retry,
+      // persistNewEntryToCloud's UPSERT is a no-op against the
+      // already-existing row, then attachEntryToTodaysSessions
+      // re-tries the session link.
+      setStore((state) => ({
+        pendingPersists: {
+          ...state.pendingPersists,
+          [cached.id]: {
+            entry: cached,
+            ctx,
+            enqueuedAt: Date.now(),
+            attempts: 1,
+            lastError: msg,
+          },
+        },
+      }));
+    },
+  );
 }
 
 /**
@@ -539,16 +561,44 @@ async function withSupabaseTimeout<T>(
   ms: number,
   label: string,
 ): Promise<T> {
+  // ⚠️ Field-reported data loss: in some wedge states (long-idle tab
+  // after Chrome throttling) supabase-js's fetch IGNORES the abort
+  // signal and the await never resolves OR rejects.  The earlier
+  // implementation here only called `controller.abort()` and trusted
+  // the SDK to bubble that up — which fails silently for entire
+  // teaching sessions, because the .catch() in dictStore.query never
+  // fires and nothing reaches pendingPersists.  No banner, no retry,
+  // user discovers the loss the next day when the PPT export is
+  // empty.
+  //
+  // Fix: race the SDK call against an independent timer that ALWAYS
+  // rejects after `ms`.  The abort() is still fired (helps the
+  // well-behaved path) but the rejection no longer depends on the
+  // SDK respecting it.  Worst case the SDK eventually does respond
+  // after we've already rejected — its result is then discarded
+  // harmlessly.
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    // eslint-disable-next-line no-console
-    console.warn(`[dictStore] ${label} aborting after ${ms}ms — Supabase write may be wedged after idle`);
-    controller.abort();
-  }, ms);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await build(controller.signal);
+    return await Promise.race<T>([
+      build(controller.signal) as Promise<T>,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[dictStore] ${label} timed out after ${ms}ms — supabase-js wedged; rejecting independent of abort`,
+          );
+          controller.abort();
+          reject(
+            new Error(
+              `${label} timed out after ${ms}ms (Supabase write wedged)`,
+            ),
+          );
+        }, ms);
+      }),
+    ]);
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -1806,5 +1856,102 @@ export const useDictStore = create<DictState>()(
     },
   ),
 );
+
+/**
+ * Expose the store on `window.__dictStore` so we (or a user) can run
+ * diagnostics / emergency recovery from the browser console.  Useful
+ * scenarios:
+ *
+ *   • Inspecting state: `__dictStore.getState().pendingPersists`
+ *   • Forcing a flush: `__dictStore.getState().flushPendingPersists()`
+ *   • Recovering in-memory entries that didn't reach cloud yet (the
+ *     exact scenario that motivated this commit):
+ *
+ *       __dictStore.getState().recoverInMemoryEntries()
+ *
+ *     This walks the in-memory `entries` map, enqueues every one
+ *     into `pendingPersists` (with the current student context), then
+ *     triggers a flush.  Safe even if the entry IS already in cloud:
+ *     persistNewEntryToCloud upserts by id, so duplicates collapse.
+ *
+ * Wrapping in a `typeof window` guard so SSR / Node tests don't crash.
+ */
+if (typeof window !== 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as unknown as { __dictStore: typeof useDictStore }).__dictStore =
+    useDictStore;
+}
+
+/**
+ * Emergency recovery: take every entry in the in-memory `entries`
+ * map and enqueue it into the pending-persist queue, then trigger a
+ * flush.  Use case: a teaching session where the optimistic UI
+ * showed results but the background persist silently hung (the
+ * pre-Promise.race wedge bug).  After the user runs this from the
+ * console, all of their in-memory data gets upserted to cloud and
+ * linked to today's auto session.
+ *
+ * Not exposed as a regular store action because it's a manual
+ * emergency tool — the auto-recovery path is now Promise.race +
+ * pending queue + auto-flush on hydrate, which catches the failure
+ * AT TIME OF query() rather than after the fact.  This one is for
+ * the legacy "data already lost in memory" scenario.
+ */
+export function recoverInMemoryEntries(): {
+  enqueued: number;
+  skipped: number;
+} {
+  const state = useDictStore.getState();
+  // Pull userId from the auth-token localStorage blob — getStoredUserIdSync
+  // works for any signed-in user, including teachers with no managed
+  // students yet and student-role accounts.  If no token, bail.
+  const userId = getStoredUserIdSync();
+  if (!userId) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[dictStore.recoverInMemoryEntries] no userId in localStorage auth token — sign in first',
+    );
+    return { enqueued: 0, skipped: 0 };
+  }
+  const ctx: PersistContext = {
+    userId,
+    managedStudentId: state.currentManagedStudentId,
+    activeManualSessionId: state.activeManualSessionId,
+  };
+  const entries = Object.values(state.entries);
+  let enqueued = 0;
+  let skipped = 0;
+  const additions: Record<string, PendingPersist> = {};
+  for (const e of entries) {
+    if (state.pendingPersists[e.id]) {
+      skipped++;
+      continue;
+    }
+    additions[e.id] = {
+      entry: e,
+      ctx,
+      enqueuedAt: Date.now(),
+      attempts: 0,
+      lastError: 'recoverInMemoryEntries (manual rescue)',
+    };
+    enqueued++;
+  }
+  useDictStore.setState((s) => ({
+    pendingPersists: { ...s.pendingPersists, ...additions },
+  }));
+  void state.flushPendingPersists();
+  // eslint-disable-next-line no-console
+  console.log(
+    `[dictStore.recoverInMemoryEntries] enqueued ${enqueued} entries (skipped ${skipped} already pending); flushing now`,
+  );
+  return { enqueued, skipped };
+}
+
+// Also expose on window for in-tab manual rescue.
+if (typeof window !== 'undefined') {
+  (
+    window as unknown as { __recoverInMemoryEntries: typeof recoverInMemoryEntries }
+  ).__recoverInMemoryEntries = recoverInMemoryEntries;
+}
 
 export type { ExportOptions };
