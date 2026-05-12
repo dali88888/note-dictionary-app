@@ -33,7 +33,13 @@ import { translateWord } from '../api/translateClient';
 import type { UILang } from '../i18n';
 import { supabase, withTimeout } from '../auth/supabaseClient';
 import type { ManagedStudent } from '../auth/types';
-import { withSupabaseTimeout } from './withSupabaseTimeout';
+import {
+  restInsert,
+  restUpsert,
+  restUpdate,
+  restDelete,
+  restSelect,
+} from '../auth/supabaseRest';
 
 const DEFAULT_LANGUAGE = 'English';
 const DEFAULT_UI_LANG: UILang = 'en';
@@ -305,25 +311,44 @@ async function attachEntryToTodaysSessions(
     (s) => s.kind === 'auto' && s.name === todayKey,
   );
   if (!autoSession) {
-    const { data: sessRow, error: sessErr } = await withSupabaseTimeout(
-      (signal) =>
-        supabase
-          .from('class_sessions')
-          .insert({
-            owner_user_id: ctx.userId,
-            managed_student_id: ctx.managedStudentId,
-            name: todayKey,
-            kind: 'auto',
-          })
-          .abortSignal(signal)
-          .select()
-          .single(),
-      SUPABASE_WRITE_TIMEOUT_MS,
-      'persist/class_sessions.insert',
-    );
-    if (sessErr) throw sessErr;
-    autoSession = sessionFromRow(sessRow as SessionRow, []);
-    updatedSessions = [autoSession, ...updatedSessions];
+    // Lookup-or-create the auto session for (this user, this student,
+    // today's date).  We don't rely on a unique index to dedupe — a
+    // concurrent insert race could occasionally produce two rows with
+    // the same name; rare enough not to bother yet.
+    //
+    // Lookup uses restSelect (raw fetch) too — see below for why
+    // writes ALL bypass supabase-js, but for symmetry the lookup
+    // tied to the write also goes through raw fetch.
+    const studentFilter =
+      ctx.managedStudentId === null
+        ? 'managed_student_id=is.null'
+        : `managed_student_id=eq.${ctx.managedStudentId}`;
+    const lookupQ =
+      `owner_user_id=eq.${ctx.userId}&${studentFilter}` +
+      `&name=eq.${encodeURIComponent(todayKey)}&kind=eq.auto&limit=1`;
+    const lookup = await restSelect<SessionRow>('class_sessions', lookupQ);
+    if (lookup.error) throw new Error(lookup.error.message);
+    const found = lookup.data && lookup.data.length > 0 ? lookup.data[0] : null;
+    if (found) {
+      autoSession = sessionFromRow(found, []);
+      updatedSessions = [autoSession, ...updatedSessions];
+    } else {
+      const ins = await restInsert<SessionRow>(
+        'class_sessions',
+        {
+          owner_user_id: ctx.userId,
+          managed_student_id: ctx.managedStudentId,
+          name: todayKey,
+          kind: 'auto',
+        },
+        { returning: 'representation', timeoutMs: SUPABASE_WRITE_TIMEOUT_MS },
+      );
+      if (ins.error) throw new Error(ins.error.message);
+      const inserted = ins.data && ins.data.length > 0 ? ins.data[0] : null;
+      if (!inserted) throw new Error('class_sessions.insert returned no row');
+      autoSession = sessionFromRow(inserted, []);
+      updatedSessions = [autoSession, ...updatedSessions];
+    }
   }
 
   // Pick sessions that don't already have this entry (skip duplicates —
@@ -343,13 +368,15 @@ async function attachEntryToTodaysSessions(
       session_id: s.id,
       entry_id: entryId,
     }));
-    const { error: linkErr } = await withSupabaseTimeout(
-      (signal) =>
-        supabase.from('session_entries').insert(links).abortSignal(signal),
-      SUPABASE_WRITE_TIMEOUT_MS,
-      'persist/session_entries.insert',
-    );
-    if (linkErr) throw linkErr;
+    // Upsert with ignore-duplicates so retry-after-failed-response
+    // is idempotent (the unique PK on (session_id, entry_id) would
+    // otherwise 409 a perfectly-valid retry).
+    const linkRes = await restInsert<SessionEntryRow>('session_entries', links, {
+      onConflict: 'session_id,entry_id',
+      resolution: 'ignore-duplicates',
+      timeoutMs: SUPABASE_WRITE_TIMEOUT_MS,
+    });
+    if (linkRes.error) throw new Error(linkRes.error.message);
 
     const linkedIds = new Set(targetSessions.map((s) => s.id));
     updatedSessions = updatedSessions.map((s) =>
@@ -385,33 +412,38 @@ async function persistNewEntryToCloud(
       | ((state: DictState) => Partial<DictState>),
   ) => void,
 ): Promise<void> {
-  // 1. UPSERT the entry.  We provide our own UUID — Postgres's
-  //    `default gen_random_uuid()` only kicks in when no value is
-  //    sent.  This lets us show the entry in the UI before the
-  //    upsert completes (the id is already known) and lets retries
-  //    be idempotent.
-  const { error: entryErr } = await withSupabaseTimeout(
-    (signal) =>
-      supabase
-        .from('entries')
-        .upsert({
-          id: entry.id,
-          owner_user_id: ctx.userId,
-          managed_student_id: ctx.managedStudentId,
-          word: entry.word,
-          direction: entry.direction ?? 'zh-to-other',
-          language: entry.language,
-          word_syllables: entry.wordSyllables,
-          meanings: entry.meanings,
-          // Preserve the original query timestamp on retries so the
-          // entry sorts to its real position in History, not to "now".
-          queried_at: new Date(entry.queriedAt).toISOString(),
-        })
-        .abortSignal(signal),
-    SUPABASE_WRITE_TIMEOUT_MS,
-    'persist/entries.upsert',
+  // 1. UPSERT the entry via raw fetch — NOT supabase-js.
+  //
+  // Critical field finding: after a tab has been open for a few hours
+  // (Chrome throttling kicking in on long-lived sessions), supabase-
+  // js's `from(...).upsert(...)` silently wedges.  No resolution, no
+  // rejection, no abort response — every write times out indefinitely.
+  // We saw 87 entries pile up in pendingPersists with "timed out
+  // after 10000ms" before finding that the same payload via raw
+  // fetch returns 201 in ~1 s.  So all writes bypass the SDK now.
+  //
+  // We provide our own UUID — Postgres's `default gen_random_uuid()`
+  // only kicks in when no value is sent.  This lets us show the entry
+  // in the UI before the upsert completes and lets retries be
+  // idempotent (upsert on `id` overwrites with the same payload).
+  const entryRes = await restUpsert<EntryRow>(
+    'entries',
+    {
+      id: entry.id,
+      owner_user_id: ctx.userId,
+      managed_student_id: ctx.managedStudentId,
+      word: entry.word,
+      direction: entry.direction ?? 'zh-to-other',
+      language: entry.language,
+      word_syllables: entry.wordSyllables,
+      meanings: entry.meanings,
+      // Preserve the original query timestamp on retries so the
+      // entry sorts to its real position in History, not to "now".
+      queried_at: new Date(entry.queriedAt).toISOString(),
+    },
+    { onConflict: 'id', timeoutMs: SUPABASE_WRITE_TIMEOUT_MS },
   );
-  if (entryErr) throw entryErr;
+  if (entryRes.error) throw new Error(entryRes.error.message);
   // eslint-disable-next-line no-console
   console.log(
     `[dictStore] persisted entry ${entry.id} word="${entry.word}" managed_student_id=${ctx.managedStudentId ?? 'null(self)'}`,
@@ -445,23 +477,21 @@ async function persistNewEntryToCloud(
 async function updateExistingEntryInCloud(
   entry: DictionaryEntry,
 ): Promise<void> {
-  const { error } = await withSupabaseTimeout(
-    (signal) =>
-      supabase
-        .from('entries')
-        .update({
-          word: entry.word,
-          direction: entry.direction ?? 'zh-to-other',
-          language: entry.language,
-          word_syllables: entry.wordSyllables,
-          meanings: entry.meanings,
-        })
-        .eq('id', entry.id)
-        .abortSignal(signal),
-    SUPABASE_WRITE_TIMEOUT_MS,
-    'persist/entries.update(refresh)',
+  // Raw-fetch UPDATE — see persistNewEntryToCloud for the long
+  // explanation of why writes bypass supabase-js.
+  const res = await restUpdate<EntryRow>(
+    'entries',
+    { id: entry.id },
+    {
+      word: entry.word,
+      direction: entry.direction ?? 'zh-to-other',
+      language: entry.language,
+      word_syllables: entry.wordSyllables,
+      meanings: entry.meanings,
+    },
+    { timeoutMs: SUPABASE_WRITE_TIMEOUT_MS },
   );
-  if (error) throw error;
+  if (res.error) throw new Error(res.error.message);
   // eslint-disable-next-line no-console
   console.log(
     `[dictStore] refreshed entry ${entry.id} word="${entry.word}"`,
@@ -1066,18 +1096,23 @@ export const useDictStore = create<DictState>()(
         if (!name) return null;
         const userId = await getCurrentUserId();
         if (!userId) return null;
-        const { data, error } = await supabase
-          .from('managed_students')
-          .insert({ teacher_id: userId, name })
-          .select()
-          .single();
-        if (error) {
+        // Raw-fetch INSERT — bypasses wedge-prone supabase-js writes.
+        const res = await restInsert<ManagedStudentRow>(
+          'managed_students',
+          { teacher_id: userId, name },
+          { returning: 'representation' },
+        );
+        if (res.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] addManagedStudent failed', error);
-          set({ error: error.message });
+          console.error('[dictStore] addManagedStudent failed', res.error);
+          set({ error: res.error.message });
           return null;
         }
-        const row = data as ManagedStudentRow;
+        const row = res.data && res.data.length > 0 ? res.data[0] : null;
+        if (!row) {
+          set({ error: 'addManagedStudent returned no row' });
+          return null;
+        }
         const ms: ManagedStudent = {
           id: row.id,
           teacher_id: row.teacher_id,
@@ -1091,14 +1126,18 @@ export const useDictStore = create<DictState>()(
       renameManagedStudent: async (id, rawName) => {
         const name = rawName.trim();
         if (!name) return;
-        const { error } = await supabase
-          .from('managed_students')
-          .update({ name })
-          .eq('id', id);
-        if (error) {
+        const res = await restUpdate<ManagedStudentRow>(
+          'managed_students',
+          { id },
+          { name },
+        );
+        if (res.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] renameManagedStudent failed', error);
-          set({ error: error.message });
+          console.error(
+            '[dictStore] renameManagedStudent failed',
+            res.error,
+          );
+          set({ error: res.error.message });
           return;
         }
         set((s) => ({
@@ -1112,14 +1151,11 @@ export const useDictStore = create<DictState>()(
         // Postgres ON DELETE CASCADE wipes that student's entries +
         // class_sessions automatically, which is the desired behavior:
         // when a teacher removes a student folder, all their data goes too.
-        const { error } = await supabase
-          .from('managed_students')
-          .delete()
-          .eq('id', id);
-        if (error) {
+        const res = await restDelete('managed_students', { id });
+        if (res.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] deleteManagedStudent failed', error);
-          set({ error: error.message });
+          console.error('[dictStore] deleteManagedStudent failed', res.error);
+          set({ error: res.error.message });
           return;
         }
         const wasCurrent = get().currentManagedStudentId === id;
@@ -1545,16 +1581,16 @@ export const useDictStore = create<DictState>()(
         });
 
         // FK cascades clean up session_entries.
-        const { error } = await supabase.from('entries').delete().eq('id', entryId);
-        if (error) {
+        const res = await restDelete('entries', { id: entryId });
+        if (res.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] deleteEntry failed', error);
+          console.error('[dictStore] deleteEntry failed', res.error);
           // Restore the entry locally so UI doesn't lie.
           set({
             entries: { ...restEntries, [entryId]: exists },
             sessions: state.sessions,
             anonCache: state.anonCache,
-            error: error.message,
+            error: res.error.message,
           });
         }
       },
@@ -1564,23 +1600,28 @@ export const useDictStore = create<DictState>()(
         if (!userId) return;
         const { currentManagedStudentId } = get();
         const trimmed = name.trim() || `课程 ${dateKey(Date.now())}`;
-        const { data: sessRow, error } = await supabase
-          .from('class_sessions')
-          .insert({
+        const res = await restInsert<SessionRow>(
+          'class_sessions',
+          {
             owner_user_id: userId,
             managed_student_id: currentManagedStudentId,
             name: trimmed,
             kind: 'manual',
-          })
-          .select()
-          .single();
-        if (error) {
+          },
+          { returning: 'representation' },
+        );
+        if (res.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] startManualClass failed', error);
-          set({ error: error.message });
+          console.error('[dictStore] startManualClass failed', res.error);
+          set({ error: res.error.message });
           return;
         }
-        const session = sessionFromRow(sessRow as SessionRow, []);
+        const sessRow = res.data && res.data.length > 0 ? res.data[0] : null;
+        if (!sessRow) {
+          set({ error: 'startManualClass returned no row' });
+          return;
+        }
+        const session = sessionFromRow(sessRow, []);
         set((s) => ({
           sessions: [session, ...s.sessions],
           activeManualSessionId: session.id,
@@ -1592,14 +1633,15 @@ export const useDictStore = create<DictState>()(
         const id = state.activeManualSessionId;
         if (!id) return;
         const endedAtISO = new Date().toISOString();
-        const { error } = await supabase
-          .from('class_sessions')
-          .update({ ended_at: endedAtISO })
-          .eq('id', id);
-        if (error) {
+        const res = await restUpdate<SessionRow>(
+          'class_sessions',
+          { id },
+          { ended_at: endedAtISO },
+        );
+        if (res.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] endManualClass failed', error);
-          set({ error: error.message });
+          console.error('[dictStore] endManualClass failed', res.error);
+          set({ error: res.error.message });
           return;
         }
         const endedAt = new Date(endedAtISO).getTime();
@@ -1614,14 +1656,15 @@ export const useDictStore = create<DictState>()(
       renameSession: async (sessionId, name) => {
         const trimmed = name.trim();
         if (!trimmed) return;
-        const { error } = await supabase
-          .from('class_sessions')
-          .update({ name: trimmed })
-          .eq('id', sessionId);
-        if (error) {
+        const res = await restUpdate<SessionRow>(
+          'class_sessions',
+          { id: sessionId },
+          { name: trimmed },
+        );
+        if (res.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] renameSession failed', error);
-          set({ error: error.message });
+          console.error('[dictStore] renameSession failed', res.error);
+          set({ error: res.error.message });
           return;
         }
         set((s) => ({
@@ -1646,15 +1689,22 @@ export const useDictStore = create<DictState>()(
           const orphaned = target.entryIds.filter((id) => !referenced.has(id));
 
           if (orphaned.length > 0) {
-            const { error: delErr } = await supabase
-              .from('entries')
-              .delete()
-              .in('id', orphaned);
-            if (delErr) {
-              // eslint-disable-next-line no-console
-              console.error('[dictStore] deleteSession (entries) failed', delErr);
-              set({ error: delErr.message });
-              return;
+            // restDelete supports a single `eq.` per column.  For a
+            // batch of ids we issue one DELETE per id — sequential
+            // raw-fetch deletes are still fast (each ~100–300 ms) and
+            // way more reliable than a single supabase-js .in() that
+            // can wedge.  Total time for a class of 50 entries: ~10 s.
+            for (const orphanId of orphaned) {
+              const delRes = await restDelete('entries', { id: orphanId });
+              if (delRes.error) {
+                // eslint-disable-next-line no-console
+                console.error(
+                  '[dictStore] deleteSession (entries) failed',
+                  delRes.error,
+                );
+                set({ error: delRes.error.message });
+                return;
+              }
             }
             newEntries = { ...state.entries };
             orphaned.forEach((id) => delete newEntries[id]);
@@ -1662,14 +1712,11 @@ export const useDictStore = create<DictState>()(
         }
 
         // session_entries cascades on the FK.
-        const { error } = await supabase
-          .from('class_sessions')
-          .delete()
-          .eq('id', sessionId);
-        if (error) {
+        const delSessRes = await restDelete('class_sessions', { id: sessionId });
+        if (delSessRes.error) {
           // eslint-disable-next-line no-console
-          console.error('[dictStore] deleteSession failed', error);
-          set({ error: error.message });
+          console.error('[dictStore] deleteSession failed', delSessRes.error);
+          set({ error: delSessRes.error.message });
           return;
         }
 
