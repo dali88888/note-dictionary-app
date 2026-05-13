@@ -32,23 +32,166 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
- * Read the user's access token straight from localStorage — same
- * storage key supabase-js uses internally.  Synchronous, can't wedge,
- * can't be blocked by the SDK's broken state.  Returns null when no
- * user is signed in (anon mode).
+ * Read the entire stored auth token blob (access_token, refresh_token,
+ * expires_at, …) from localStorage.  Synchronous, can't wedge, can't
+ * be blocked by the SDK's broken state.  Returns null when no user is
+ * signed in (anon mode) or when the blob is missing fields.
  */
-function readAccessToken(): string | null {
+interface StoredAuthToken {
+  access_token: string;
+  refresh_token: string;
+  expires_at?: number; // unix seconds
+  expires_in?: number;
+  token_type?: string;
+  user?: unknown;
+}
+function readStoredAuth(): StoredAuthToken | null {
   if (!SUPABASE_URL) return null;
   try {
     const ref = SUPABASE_URL.match(/https?:\/\/([^.]+)\./)?.[1];
     if (!ref) return null;
     const raw = localStorage.getItem(`sb-${ref}-auth-token`);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { access_token?: string } | null;
-    return parsed?.access_token ?? null;
+    const parsed = JSON.parse(raw) as Partial<StoredAuthToken> | null;
+    if (!parsed?.access_token || !parsed?.refresh_token) return null;
+    return parsed as StoredAuthToken;
   } catch {
     return null;
   }
+}
+
+function readAccessToken(): string | null {
+  return readStoredAuth()?.access_token ?? null;
+}
+
+/**
+ * Write a refreshed token blob back to localStorage so future reads
+ * (in this tab AND in any other tab using the same storage) see the
+ * new token.  Preserves any unknown fields supabase-js might rely on
+ * (e.g. `user`) by spreading them.
+ */
+function writeStoredAuth(next: Partial<StoredAuthToken>): void {
+  if (!SUPABASE_URL) return;
+  try {
+    const ref = SUPABASE_URL.match(/https?:\/\/([^.]+)\./)?.[1];
+    if (!ref) return;
+    const key = `sb-${ref}-auth-token`;
+    const cur = JSON.parse(localStorage.getItem(key) ?? '{}');
+    const merged = { ...cur, ...next };
+    localStorage.setItem(key, JSON.stringify(merged));
+  } catch {
+    /* private-mode localStorage etc. — best-effort */
+  }
+}
+
+/**
+ * Refresh the Supabase access token via raw fetch (bypasses SDK).
+ *
+ * Background: supabase-js's `autoRefreshToken: true` is supposed to
+ * keep the access token fresh in the background.  In the field — same
+ * SDK that wedges on writes — autoRefreshToken sometimes never fires,
+ * so the cached access_token quietly expires (default 1 hour) and
+ * every subsequent write returns 401 "JWT expired" indefinitely.
+ *
+ * This function hits the same `/auth/v1/token?grant_type=refresh_token`
+ * endpoint directly with `fetch`, parses the response, and writes the
+ * new tokens back to localStorage so subsequent `readAccessToken()`
+ * calls pick them up.  Wrapped in Promise.race so a wedged refresh
+ * fetch can't hang either.
+ *
+ * Returns the new access_token on success, null on failure (e.g.
+ * refresh_token also expired — user genuinely needs to re-login).
+ *
+ * In-flight refreshes are deduplicated: a stampede of writes all
+ * hitting 401 at once will trigger ONE refresh and reuse its result.
+ */
+let inFlightRefresh: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (inFlightRefresh) return inFlightRefresh;
+  inFlightRefresh = (async () => {
+    if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+    const stored = readStoredAuth();
+    if (!stored) return null;
+    const refreshUrl =
+      `${SUPABASE_URL.replace(/\/+$/, '')}` +
+      `/auth/v1/token?grant_type=refresh_token`;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const res = await Promise.race<Response>([
+        fetch(refreshUrl, {
+          method: 'POST',
+          headers: { apikey: SUPABASE_KEY, 'content-type': 'application/json' },
+          body: JSON.stringify({ refresh_token: stored.refresh_token }),
+          signal: controller.signal,
+        }),
+        new Promise<Response>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error('token refresh timed out'));
+          }, 8_000);
+        }),
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+      if (!res.ok) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[supabaseRest] token refresh failed: HTTP ${res.status}`,
+        );
+        return null;
+      }
+      const body = (await res.json()) as {
+        access_token?: string;
+        refresh_token?: string;
+        expires_in?: number;
+        expires_at?: number;
+        user?: unknown;
+        token_type?: string;
+      };
+      if (!body.access_token || !body.refresh_token) return null;
+      const expiresAt =
+        body.expires_at ??
+        Math.floor(Date.now() / 1000) + (body.expires_in ?? 3600);
+      writeStoredAuth({
+        access_token: body.access_token,
+        refresh_token: body.refresh_token,
+        expires_at: expiresAt,
+        expires_in: body.expires_in,
+        token_type: body.token_type,
+        user: body.user ?? stored.user,
+      });
+      // eslint-disable-next-line no-console
+      console.log(
+        `[supabaseRest] token refreshed; new expiry ${new Date(expiresAt * 1000).toISOString()}`,
+      );
+      return body.access_token;
+    } catch (err) {
+      if (timer !== undefined) clearTimeout(timer);
+      // eslint-disable-next-line no-console
+      console.warn('[supabaseRest] token refresh error:', err);
+      return null;
+    }
+  })();
+  try {
+    return await inFlightRefresh;
+  } finally {
+    inFlightRefresh = null;
+  }
+}
+
+/**
+ * Returns true if the stored access token is missing, already expired,
+ * or expires within `withinSec` seconds.  Used to pro-actively refresh
+ * BEFORE issuing a write so we don't pay the cost of a guaranteed-401
+ * round-trip when the token is known to be dead.
+ */
+function tokenNeedsRefresh(withinSec = 60): boolean {
+  const stored = readStoredAuth();
+  if (!stored) return false; // anon — no token to refresh
+  if (!stored.expires_at) return false; // unknown — assume good
+  const nowSec = Math.floor(Date.now() / 1000);
+  return stored.expires_at - withinSec <= nowSec;
 }
 
 export interface RestResult<T> {
@@ -90,7 +233,7 @@ interface RestRequestInit {
  */
 async function restRequest<T>(
   table: string,
-  init: RestRequestInit,
+  init: RestRequestInit & { _retriedAfterRefresh?: boolean },
 ): Promise<RestResult<T>> {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
     return {
@@ -99,6 +242,16 @@ async function restRequest<T>(
     };
   }
   const apikey = init.apikey ?? SUPABASE_KEY;
+  // Pro-active refresh: if the stored access token is expired (or about
+  // to expire), refresh BEFORE issuing the request.  This catches the
+  // "laptop slept past the 1-hour token lifetime" case that the user
+  // hit on May 13: the supabase-js auto-refresh didn't fire during
+  // sleep, every subsequent write returned 401 "JWT expired", and our
+  // pending queue piled up with no recovery.  Doing the refresh
+  // up-front here makes the very first write after wake-up succeed.
+  if (init.accessToken === undefined && tokenNeedsRefresh()) {
+    await refreshAccessToken();
+  }
   const accessToken = init.accessToken ?? readAccessToken();
   const timeoutMs = init.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -174,6 +327,33 @@ async function restRequest<T>(
         else msg = `${msg}: ${bodyText.slice(0, 200)}`;
       } catch {
         msg = `${msg}: ${bodyText.slice(0, 200)}`;
+      }
+    }
+    // Reactive token refresh on 401 "JWT expired": the proactive check
+    // above misses the corner case where the token JUST expired
+    // between our `tokenNeedsRefresh()` read and the server processing
+    // the request, or where `expires_at` is missing from the storage
+    // blob.  In that case we refresh now and retry ONCE.  The
+    // `_retriedAfterRefresh` flag prevents infinite recursion if the
+    // refresh itself produces a token that still gets rejected (which
+    // would mean the user's refresh_token is also dead — genuine
+    // re-login needed).
+    if (
+      res.status === 401 &&
+      !init._retriedAfterRefresh &&
+      /jwt|expired|invalid token/i.test(msg)
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[supabaseRest] ${init.method} ${table} got 401 (${msg}); refreshing token and retrying once`,
+      );
+      const fresh = await refreshAccessToken();
+      if (fresh) {
+        return restRequest<T>(table, {
+          ...init,
+          accessToken: fresh,
+          _retriedAfterRefresh: true,
+        });
       }
     }
     return {

@@ -51,20 +51,30 @@ vi.stubEnv('VITE_SUPABASE_PUBLISHABLE_KEY', 'sb_publishable_TEST_KEY');
 // `nganzcuaypbtjykoicdg`, not `fake`.  So instead of guessing the key,
 // the shim returns our test token for ANY key ending in `-auth-token`.
 const memStore = new Map<string, string>();
-const TEST_TOKEN = JSON.stringify({
+const DEFAULT_TOKEN = {
   access_token: 'TEST_ACCESS_TOKEN',
   refresh_token: 'TEST_REFRESH_TOKEN',
+  // Default to a far-future expiry so tests that don't care about
+  // refresh don't trigger it.
+  expires_at: Math.floor(Date.now() / 1000) + 60_000,
   user: { id: 'user-1' },
-});
+};
+// Per-test override for the auth-token blob.  Tests that exercise the
+// refresh path overwrite this with an expired/missing-expiry token.
+let authTokenOverride: string | null = JSON.stringify(DEFAULT_TOKEN);
 const localStorageShim = {
   getItem: (k: string) => {
     if (memStore.has(k)) return memStore.get(k)!;
-    // Catch-all for any sb-<ref>-auth-token lookup — see comment above.
-    if (/-auth-token$/.test(k)) return TEST_TOKEN;
+    // Catch-all for any sb-<ref>-auth-token lookup.  Returns whatever
+    // the current test set via setAuthToken() (or the default).
+    if (/-auth-token$/.test(k)) return authTokenOverride;
     return null;
   },
   setItem: (k: string, v: string) => {
     memStore.set(k, String(v));
+    // Mirror auth-token writes so subsequent reads see the refreshed
+    // tokens (this is what `writeStoredAuth` in supabaseRest.ts does).
+    if (/-auth-token$/.test(k)) authTokenOverride = v;
   },
   removeItem: (k: string) => {
     memStore.delete(k);
@@ -83,11 +93,17 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
 });
 
+/** Replace the stored auth token for the current test. */
+function setAuthToken(token: object | null): void {
+  authTokenOverride = token === null ? null : JSON.stringify(token);
+}
+
 beforeEach(() => {
-  // No-op — the shim handles auth-token lookup automatically.
+  setAuthToken(DEFAULT_TOKEN);
 });
 afterEach(() => {
   memStore.clear();
+  setAuthToken(DEFAULT_TOKEN);
   vi.restoreAllMocks();
 });
 
@@ -228,5 +244,173 @@ describe('supabaseRest — raw fetch helper', () => {
     expect(capturedUrl).toContain('owner_user_id=eq.user-1');
     expect(capturedUrl).toContain('limit=5');
     expect(res.data).toEqual([{ id: 'a' }]);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────
+ * Token-refresh regression tests
+ *
+ * Each test maps to a real production failure:
+ *
+ *   - User taught a class on May 13.  Token expired during laptop
+ *     sleep between class 1 and class 2.  17 entries piled up in
+ *     pendingPersists with "JWT expired" because supabase-js's
+ *     auto-refresh failed AND our raw-fetch layer kept sending the
+ *     same dead token on every retry forever.  Tests below verify
+ *     both the pro-active path (refresh before sending if the token
+ *     is known-expired) and the reactive path (refresh + retry once
+ *     if the server returns 401 "JWT expired").
+ * ─────────────────────────────────────────────────────────────── */
+describe('supabaseRest — token refresh regression tests', () => {
+  it('pro-actively refreshes when stored token expires_at is in the past', async () => {
+    // Simulate an already-expired token in localStorage.
+    setAuthToken({
+      access_token: 'EXPIRED_TOKEN',
+      refresh_token: 'GOOD_REFRESH_TOKEN',
+      expires_at: Math.floor(Date.now() / 1000) - 100, // 100s ago
+      user: { id: 'u' },
+    });
+
+    let refreshCalled = false;
+    let writeCallAuthHeader: string | null = null;
+
+    mockFetch(async (url, init) => {
+      const u = url.toString();
+      const headers = new Headers(init?.headers);
+      if (u.includes('/auth/v1/token?grant_type=refresh_token')) {
+        refreshCalled = true;
+        return new Response(
+          JSON.stringify({
+            access_token: 'FRESH_ACCESS_TOKEN',
+            refresh_token: 'FRESH_REFRESH_TOKEN',
+            expires_in: 3600,
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+          }),
+          { status: 200 },
+        );
+      }
+      // The actual write call should now carry the FRESH token.
+      writeCallAuthHeader = headers.get('authorization');
+      return new Response(null, { status: 204 });
+    });
+
+    const res = await restInsert('entries', { word: 'x' });
+    expect(refreshCalled).toBe(true);
+    expect(writeCallAuthHeader).toBe('Bearer FRESH_ACCESS_TOKEN');
+    expect(res.error).toBeNull();
+  });
+
+  it('reactively refreshes + retries ONCE on 401 "JWT expired"', async () => {
+    // Token has a future expiry so pro-active refresh does NOT fire.
+    // Server still rejects with 401 "JWT expired" — simulates the
+    // corner case where supabase clock skew / extra-short token /
+    // last-millisecond expiry slips past tokenNeedsRefresh().
+    setAuthToken({
+      access_token: 'STALE_BUT_FUTURE_TOKEN',
+      refresh_token: 'GOOD_REFRESH_TOKEN',
+      expires_at: Math.floor(Date.now() / 1000) + 60_000,
+      user: { id: 'u' },
+    });
+
+    const authHeadersSeen: (string | null)[] = [];
+    let refreshCalled = false;
+    let writeAttempt = 0;
+
+    mockFetch(async (url, init) => {
+      const u = url.toString();
+      if (u.includes('/auth/v1/token?grant_type=refresh_token')) {
+        refreshCalled = true;
+        return new Response(
+          JSON.stringify({
+            access_token: 'FRESH_TOKEN_AFTER_RETRY',
+            refresh_token: 'NEW_REFRESH',
+            expires_in: 3600,
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+          }),
+          { status: 200 },
+        );
+      }
+      const headers = new Headers(init?.headers);
+      authHeadersSeen.push(headers.get('authorization'));
+      writeAttempt++;
+      if (writeAttempt === 1) {
+        // First attempt: server says JWT expired.
+        return new Response(JSON.stringify({ message: 'JWT expired' }), {
+          status: 401,
+        });
+      }
+      // Retry with the refreshed token: success.
+      return new Response(null, { status: 204 });
+    });
+
+    const res = await restInsert('entries', { word: 'x' });
+    expect(refreshCalled).toBe(true);
+    expect(res.error).toBeNull(); // Final result is success
+    expect(writeAttempt).toBe(2); // Original + 1 retry
+    expect(authHeadersSeen[0]).toBe('Bearer STALE_BUT_FUTURE_TOKEN');
+    expect(authHeadersSeen[1]).toBe('Bearer FRESH_TOKEN_AFTER_RETRY');
+  });
+
+  it('does NOT retry indefinitely if refresh produces a still-bad token (refresh_token also dead)', async () => {
+    setAuthToken({
+      access_token: 'DEAD_ACCESS',
+      refresh_token: 'DEAD_REFRESH',
+      expires_at: Math.floor(Date.now() / 1000) + 60_000,
+      user: { id: 'u' },
+    });
+
+    let writeAttempts = 0;
+    mockFetch(async (url) => {
+      const u = url.toString();
+      if (u.includes('/auth/v1/token?grant_type=refresh_token')) {
+        // Refresh "succeeds" but returns a new token; the actual write
+        // will still fail with 401 (server side rejects new token too).
+        return new Response(
+          JSON.stringify({
+            access_token: 'STILL_BAD',
+            refresh_token: 'STILL_BAD_REFRESH',
+            expires_in: 3600,
+          }),
+          { status: 200 },
+        );
+      }
+      writeAttempts++;
+      return new Response(JSON.stringify({ message: 'JWT expired' }), {
+        status: 401,
+      });
+    });
+
+    const res = await restInsert('entries', { word: 'x' });
+    expect(writeAttempts).toBe(2); // Only ONE retry — no infinite loop
+    expect(res.error?.code).toBe('401');
+  });
+
+  it('surfaces 401 directly (no refresh attempt) when message is NOT a JWT problem', async () => {
+    setAuthToken({
+      access_token: 'GOOD_TOKEN',
+      refresh_token: 'GOOD_REFRESH',
+      expires_at: Math.floor(Date.now() / 1000) + 60_000,
+      user: { id: 'u' },
+    });
+
+    let refreshCalled = false;
+    let writeAttempts = 0;
+    mockFetch(async (url) => {
+      const u = url.toString();
+      if (u.includes('/auth/v1/token?grant_type=refresh_token')) {
+        refreshCalled = true;
+        return new Response('{}', { status: 200 });
+      }
+      writeAttempts++;
+      return new Response(
+        JSON.stringify({ message: 'permission denied for table entries' }),
+        { status: 401 },
+      );
+    });
+
+    const res = await restInsert('entries', { word: 'x' });
+    expect(refreshCalled).toBe(false);
+    expect(writeAttempts).toBe(1);
+    expect(res.error?.message).toContain('permission denied');
   });
 });
