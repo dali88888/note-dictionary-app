@@ -98,13 +98,38 @@ export interface ExportOptions {
   title?: string;
 }
 
+/**
+ * "Translate to" picker options.
+ *
+ * Order MUST match the UI-language picker (`UI_LANGS` in
+ * src/i18n/index.ts).  Two reasons:
+ *   1. Users see the same nine languages in both places — keeping
+ *      them in the same sequence avoids the "wait, where's Spanish?"
+ *      moment when the brain expects a position from one to apply
+ *      to the other.
+ *   2. We can map directly between them when we want to (e.g. default
+ *      target language matches the user's UI choice on first sign-in).
+ *
+ * 中文 IS included even though the search direction is auto-detected:
+ *   - When the user types non-Chinese, target is implicitly Chinese
+ *     and this setting is ignored (the picker is informational only).
+ *   - When the user types Chinese, target=中文 produces a monolingual
+ *     Chinese-to-Chinese dictionary entry — a valid use case for
+ *     advanced learners.
+ *   - Most importantly, surfacing 中文 here matches the user's mental
+ *     model of "all UI languages are also targets I can ask for".
+ *
+ * If a user wants a language NOT on this list, the picker has an
+ * "Other…" option that captures any free-text language name.
+ */
 export const PRESET_LANGUAGES = [
   'English',
+  '中文',
+  'Español',
+  'Deutsch',
+  'Français',
   '日本語',
   '한국어',
-  'Español',
-  'Français',
-  'Deutsch',
   'Русский',
   'العربية',
 ] as const;
