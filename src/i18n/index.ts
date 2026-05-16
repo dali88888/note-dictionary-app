@@ -86,7 +86,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       'Discard unsaved queries? This is permanent and the data is not in the cloud.',
     emptyHint:
-      'Enter a Chinese word above to start. Queries are auto-archived by date and can be exported as PPT after class.',
+      'Type a word or sentence in any language above to start. Queries are auto-archived by date and can be exported as PPT after class.',
     emptyHintReverse:
       'Enter a word or sentence in any language and get idiomatic Chinese expressions.',
 
@@ -240,9 +240,9 @@ const DICT = {
       `Imported ${v.entries} ${Number(v.entries) === 1 ? 'entry' : 'entries'} / ${v.sessions} session${Number(v.sessions) === 1 ? '' : 's'}.`,
     importLegacyFailed: (v: Vars) => `Import failed: ${v.msg}`,
 
-    signupPromptTitle: 'Sign up to build your Chinese knowledge base',
+    signupPromptTitle: 'Sign up to build your language-learning notebook',
     signupPromptBody:
-      'You can look up words right now — no sign-in required. Register to unlock:',
+      'You can look up words in any language right now — no sign-in required. Register to unlock:',
     signupPromptBullet1: 'Cloud-saved queries, available on every device',
     signupPromptBullet2: 'Auto archive by date / class, review and export to PPT anytime',
     signupPromptBullet3: 'Coming soon: auto-generated quizzes & spaced review',
@@ -300,7 +300,7 @@ const DICT = {
     pendingPersistsDiscard: '丢弃',
     pendingPersistsDiscardConfirm:
       '确定丢弃这些未保存的查询吗？此操作不可撤销，数据并未保存到云端。',
-    emptyHint: '在上方输入中文词开始查询。所有查询会自动按日期归档，课后可导出为 PPT。',
+    emptyHint: '在上方输入任意语言的词或句子开始查询。所有查询会自动按日期归档，课后可导出为 PPT。',
     emptyHintReverse: '在上方输入任意语言的词或句子，系统会给出地道的中文表达。',
 
     translatedToLine: (v: Vars) => `翻译至 ${v.lang} · ${v.n} 个义项`,
@@ -444,7 +444,7 @@ const DICT = {
       `已导入 ${v.entries} 条词条 / ${v.sessions} 组课程。`,
     importLegacyFailed: (v: Vars) => `导入失败：${v.msg}`,
 
-    signupPromptTitle: '注册账号，构建你的中文知识库',
+    signupPromptTitle: '注册账号，构建你的语言学习笔记库',
     signupPromptBody:
       '你现在可以直接查词、查例句——免登录，立即可用。注册后还能解锁这些：',
     signupPromptBullet1: '所有查询自动云端保存，跨设备访问',
@@ -509,7 +509,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       '¿Descartar consultas no guardadas? Esto es permanente — los datos no están en la nube.',
     emptyHint:
-      'Introduce una palabra china arriba para empezar. Las búsquedas se archivan por fecha y se pueden exportar a PPT.',
+      'Introduce arriba una palabra o frase en cualquier idioma para empezar. Las búsquedas se archivan por fecha y se pueden exportar a PPT.',
     emptyHintReverse:
       'Introduce una palabra o frase en cualquier idioma y obtén expresiones idiomáticas en chino.',
 
@@ -663,7 +663,7 @@ const DICT = {
       `Importadas ${v.entries} entrada${Number(v.entries) === 1 ? '' : 's'} / ${v.sessions} sesion${Number(v.sessions) === 1 ? '' : 'es'}.`,
     importLegacyFailed: (v: Vars) => `Importación fallida: ${v.msg}`,
 
-    signupPromptTitle: 'Regístrate y construye tu base de conocimiento de chino',
+    signupPromptTitle: 'Regístrate y construye tu cuaderno de aprendizaje de idiomas',
     signupPromptBody:
       'Puedes buscar palabras ahora mismo, sin registrarte. Regístrate para desbloquear:',
     signupPromptBullet1: 'Búsquedas guardadas en la nube, disponibles en cualquier dispositivo',
@@ -728,7 +728,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       'Nicht gespeicherte Abfragen verwerfen? Dies ist endgültig — die Daten sind nicht in der Cloud.',
     emptyHint:
-      'Geben Sie oben ein chinesisches Wort ein. Suchen werden automatisch nach Datum archiviert und können nach der Stunde als PPT exportiert werden.',
+      'Geben Sie oben ein Wort oder einen Satz in einer beliebigen Sprache ein. Suchen werden automatisch nach Datum archiviert und können nach der Stunde als PPT exportiert werden.',
     emptyHintReverse:
       'Geben Sie ein Wort oder einen Satz in beliebiger Sprache ein und erhalten Sie idiomatische chinesische Ausdrücke.',
 
@@ -882,7 +882,7 @@ const DICT = {
       `${v.entries} ${Number(v.entries) === 1 ? 'Eintrag' : 'Einträge'} / ${v.sessions} ${Number(v.sessions) === 1 ? 'Sitzung' : 'Sitzungen'} importiert.`,
     importLegacyFailed: (v: Vars) => `Import fehlgeschlagen: ${v.msg}`,
 
-    signupPromptTitle: 'Registrieren und Ihre Chinesisch-Wissensbasis aufbauen',
+    signupPromptTitle: 'Registrieren und Ihr Sprachlern-Notizbuch aufbauen',
     signupPromptBody:
       'Sie können sofort Wörter nachschlagen — keine Anmeldung nötig. Mit Konto erhalten Sie zusätzlich:',
     signupPromptBullet1: 'In der Cloud gespeicherte Suchen, auf jedem Gerät verfügbar',
@@ -947,7 +947,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       'Abandonner les requêtes non enregistrées ? Action irréversible — les données ne sont pas dans le cloud.',
     emptyHint:
-      'Saisissez un mot chinois ci-dessus pour commencer. Les recherches sont archivées automatiquement par date et exportables en PPT après le cours.',
+      'Saisissez ci-dessus un mot ou une phrase dans n’importe quelle langue pour commencer. Les recherches sont archivées automatiquement par date et exportables en PPT après le cours.',
     emptyHintReverse:
       'Saisissez un mot ou une phrase dans n’importe quelle langue et obtenez des expressions chinoises idiomatiques.',
 
@@ -1101,7 +1101,7 @@ const DICT = {
       `${v.entries} entrée${Number(v.entries) === 1 ? '' : 's'} / ${v.sessions} session${Number(v.sessions) === 1 ? '' : 's'} importées.`,
     importLegacyFailed: (v: Vars) => `Import échoué : ${v.msg}`,
 
-    signupPromptTitle: 'Inscrivez-vous pour bâtir votre base de connaissances en chinois',
+    signupPromptTitle: 'Inscrivez-vous pour bâtir votre carnet d’apprentissage des langues',
     signupPromptBody:
       'Vous pouvez chercher des mots dès maintenant — sans inscription. Inscrivez-vous pour débloquer :',
     signupPromptBullet1: 'Recherches sauvegardées dans le cloud, accessibles depuis n’importe quel appareil',
@@ -1163,7 +1163,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       '未保存のクエリを破棄しますか？取り消せません — データはクラウドに保存されていません。',
     emptyHint:
-      '上に中国語の単語を入力してください。検索は日付ごとに自動アーカイブされ、授業後に PPT としてエクスポートできます。',
+      '上に任意の言語の単語または文を入力してください。検索は日付ごとに自動アーカイブされ、授業後に PPT としてエクスポートできます。',
     emptyHintReverse:
       '任意の言語の単語や文を入力すると、自然な中国語表現が得られます。',
 
@@ -1313,7 +1313,7 @@ const DICT = {
       `${v.entries} 件の項目 / ${v.sessions} 件のセッションをインポートしました。`,
     importLegacyFailed: (v: Vars) => `インポート失敗：${v.msg}`,
 
-    signupPromptTitle: '登録して中国語ナレッジベースを構築',
+    signupPromptTitle: '登録して語学学習ノートを作成',
     signupPromptBody:
       '今すぐ単語を検索できます — ログイン不要。登録すると以下の機能が使えます：',
     signupPromptBullet1: '検索内容をクラウド保存、どのデバイスからでも利用可能',
@@ -1375,7 +1375,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       '저장되지 않은 검색을 버리시겠습니까? 되돌릴 수 없으며 데이터는 클라우드에 없습니다.',
     emptyHint:
-      '위에 중국어 단어를 입력해 시작하세요. 검색은 날짜별로 자동 보관되며 수업 후 PPT로 내보낼 수 있습니다.',
+      '위에 아무 언어로 단어나 문장을 입력해 시작하세요. 검색은 날짜별로 자동 보관되며 수업 후 PPT로 내보낼 수 있습니다.',
     emptyHintReverse:
       '아무 언어로 단어나 문장을 입력하면 자연스러운 중국어 표현을 얻을 수 있습니다.',
 
@@ -1525,7 +1525,7 @@ const DICT = {
       `항목 ${v.entries}개 / 세션 ${v.sessions}개를 가져왔습니다.`,
     importLegacyFailed: (v: Vars) => `가져오기 실패: ${v.msg}`,
 
-    signupPromptTitle: '가입하고 중국어 지식 베이스를 구축하세요',
+    signupPromptTitle: '가입하고 언어 학습 노트를 만드세요',
     signupPromptBody:
       '지금 바로 단어를 검색할 수 있습니다 — 로그인 불필요. 가입하면 다음 기능이 잠금 해제됩니다:',
     signupPromptBullet1: '클라우드에 저장되는 검색 기록, 모든 기기에서 사용 가능',
@@ -1588,7 +1588,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       'Удалить несохранённые запросы? Это безвозвратно — данные не загружены в облако.',
     emptyHint:
-      'Введите китайское слово выше, чтобы начать. Поисковые запросы автоматически архивируются по дате и могут быть экспортированы в PPT после урока.',
+      'Введите выше слово или фразу на любом языке, чтобы начать. Поисковые запросы автоматически архивируются по дате и могут быть экспортированы в PPT после урока.',
     emptyHintReverse:
       'Введите слово или фразу на любом языке — получите естественные китайские выражения.',
 
@@ -1738,7 +1738,7 @@ const DICT = {
       `Импортировано: записей ${v.entries} / сессий ${v.sessions}.`,
     importLegacyFailed: (v: Vars) => `Ошибка импорта: ${v.msg}`,
 
-    signupPromptTitle: 'Зарегистрируйтесь, чтобы создать свою базу китайского',
+    signupPromptTitle: 'Зарегистрируйтесь, чтобы создать свой блокнот изучения языков',
     signupPromptBody:
       'Вы уже можете искать слова — без регистрации. Зарегистрируйтесь, чтобы получить:',
     signupPromptBullet1: 'Запросы сохраняются в облаке и доступны на любом устройстве',
@@ -1800,7 +1800,7 @@ const DICT = {
     pendingPersistsDiscardConfirm:
       'تجاهل الاستعلامات غير المحفوظة؟ هذا الإجراء نهائي — البيانات ليست في السحابة.',
     emptyHint:
-      'أدخل كلمة بالصينية أعلاه للبدء. تتم أرشفة الاستعلامات تلقائيًا حسب التاريخ ويمكن تصديرها كـ PPT بعد الدرس.',
+      'أدخل أعلاه كلمة أو جملة بأي لغة للبدء. تتم أرشفة الاستعلامات تلقائيًا حسب التاريخ ويمكن تصديرها كـ PPT بعد الدرس.',
     emptyHintReverse:
       'أدخل كلمة أو جملة بأي لغة، وستحصل على تعابير صينية أصيلة.',
 
@@ -1950,7 +1950,7 @@ const DICT = {
       `تم استيراد ${v.entries} إدخال / ${v.sessions} جلسة.`,
     importLegacyFailed: (v: Vars) => `فشل الاستيراد: ${v.msg}`,
 
-    signupPromptTitle: 'سجّل لبناء قاعدة معرفتك بالصينية',
+    signupPromptTitle: 'سجّل لبناء دفتر تعلّم اللغات الخاص بك',
     signupPromptBody:
       'يمكنك البحث عن الكلمات الآن — دون تسجيل دخول. التسجيل يفتح لك:',
     signupPromptBullet1: 'استعلامات محفوظة في السحابة، متاحة على أي جهاز',

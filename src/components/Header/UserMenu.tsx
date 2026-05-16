@@ -45,7 +45,7 @@ export function UserMenu() {
           {profile.display_name}
         </span>
         <span
-          className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${roleColor}`}
+          className={`text-[10px] tracking-wide font-semibold px-1.5 py-0.5 rounded ${roleColor}`}
         >
           {roleLabel}
         </span>
