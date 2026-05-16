@@ -449,6 +449,25 @@ async function persistNewEntryToCloud(
     `[dictStore] persisted entry ${entry.id} word="${entry.word}" managed_student_id=${ctx.managedStudentId ?? 'null(self)'}`,
   );
 
+  // Bump the in-memory student-activity map so the StudentSwitcher
+  // dropdown + StudentManager modal sort by activity reflect this
+  // brand-new query immediately, without waiting for the next
+  // hydrate to re-run loadStudentLastActivity.  Skipped for
+  // null-student (the teacher's own folder) since the activity map
+  // only tracks managed students.
+  if (ctx.managedStudentId) {
+    const sid = ctx.managedStudentId;
+    setStore((state) => ({
+      studentLastActivity: {
+        ...state.studentLastActivity,
+        [sid]: Math.max(
+          state.studentLastActivity[sid] ?? 0,
+          entry.queriedAt,
+        ),
+      },
+    }));
+  }
+
   // 2. Attach to today's auto session + active manual class (if any).
   //    Use the entry's original queriedAt to figure out the date key,
   //    not Date.now() — a retry the next morning should still go into
@@ -775,6 +794,26 @@ interface DictState {
   anonCache: Record<string, DictionaryEntry>;
 
   /**
+   * Last-activity timestamp per managed student.  Driven by:
+   *   • A one-shot fetch on every successful `hydrate()` —
+   *     `loadStudentLastActivity` aggregates `max(queried_at)` across
+   *     the teacher's entries grouped by managed_student_id.
+   *   • In-line bumps whenever `persistNewEntryToCloud` succeeds for
+   *     a managed-student-scoped entry (so the sort updates without
+   *     waiting for another hydrate).
+   *
+   * Used by `sortStudents` to drive the "activity" sort mode.  Lives
+   * in the store rather than being re-fetched per component so the
+   * StudentManager modal AND the StudentSwitcher dropdown can share
+   * one source of truth (the user's chosen sort must produce the
+   * same order in both places).
+   *
+   * Transient — NOT persisted to localStorage (would be stale across
+   * reloads).  Empty until the first hydrate completes.
+   */
+  studentLastActivity: Record<string, number>;
+
+  /**
    * Persistence-failure recovery queue.  When a background save (the
    * optimistic UI flow's `persistNewEntryToCloud` / `attachEntry…`)
    * fails — e.g. Supabase SDK socket wedged after long idle, network
@@ -883,6 +922,14 @@ interface DictState {
    */
   discardPendingPersists: () => void;
 
+  /**
+   * Refresh the `studentLastActivity` map by fetching every entry's
+   * (managed_student_id, queried_at) tuple from Supabase and grouping
+   * max() client-side.  Called automatically at the end of `hydrate()`
+   * — components don't normally need to invoke this themselves.
+   */
+  loadStudentLastActivity: () => Promise<void>;
+
   collectEntries: (sessionIds: string[]) => DictionaryEntry[];
 }
 
@@ -910,6 +957,7 @@ export const useDictStore = create<DictState>()(
       hydrated: false,
       anonCache: {},
       pendingPersists: {},
+      studentLastActivity: {},
       latestEntryId: null,
       latestFromCache: false,
       loading: false,
@@ -1048,6 +1096,13 @@ export const useDictStore = create<DictState>()(
           // Important: kicked off AFTER `hydrated: true` so the UI
           // can already paint while the upserts run in the back.
           void get().flushPendingPersists();
+
+          // Refresh the student-last-activity aggregate.  Shared
+          // between the StudentManager modal and the StudentSwitcher
+          // dropdown so both render with the user's chosen sort order
+          // consistently.  Fire-and-forget; failures only degrade
+          // activity-sort to created-sort.
+          void get().loadStudentLastActivity();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           // eslint-disable-next-line no-console
@@ -1820,6 +1875,43 @@ export const useDictStore = create<DictState>()(
 
       discardPendingPersists: () => {
         set({ pendingPersists: {} });
+      },
+
+      loadStudentLastActivity: async () => {
+        const userId = await getCurrentUserId();
+        if (!userId) {
+          // Anon — no students at all.  Leave the map untouched (it's
+          // already empty from init / reset).
+          return;
+        }
+        // Use restSelect (raw fetch) so the same Promise.race + auto-
+        // refresh-on-401 protections apply.  Payload is two columns:
+        // small even for teachers with thousands of entries.
+        const query =
+          `owner_user_id=eq.${userId}` +
+          `&managed_student_id=not.is.null` +
+          `&select=managed_student_id,queried_at`;
+        const res = await restSelect<{
+          managed_student_id: string | null;
+          queried_at: string;
+        }>('entries', query);
+        if (res.error || !res.data) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[dictStore] loadStudentLastActivity failed (activity sort will fall back to created):',
+            res.error,
+          );
+          return;
+        }
+        const next: Record<string, number> = {};
+        for (const row of res.data) {
+          if (!row.managed_student_id) continue;
+          const ts = new Date(row.queried_at).getTime();
+          if (!next[row.managed_student_id] || ts > next[row.managed_student_id]) {
+            next[row.managed_student_id] = ts;
+          }
+        }
+        set({ studentLastActivity: next });
       },
 
       /* ─────────── derived helpers ─────────── */

@@ -11,9 +11,10 @@
  * a student instantly swaps the entries+sessions visible in the rest of
  * the UI.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { useDictStore } from '../../store/dictStore';
+import { sortStudents } from '../../store/sortStudents';
 import { useT } from '../../i18n/useT';
 import { StudentManager } from './StudentManager';
 
@@ -23,6 +24,24 @@ export function StudentSwitcher() {
   const managedStudents = useDictStore((s) => s.managedStudents);
   const currentManagedStudentId = useDictStore((s) => s.currentManagedStudentId);
   const setCurrentManagedStudent = useDictStore((s) => s.setCurrentManagedStudent);
+  // Mirror the sort key/dir the teacher picked in the StudentManager
+  // modal so the dropdown and the modal always show the same order.
+  // Prior to this, the dropdown was stuck at hydrate-order (created
+  // ascending) while the modal honored the user's pref — confusing UX.
+  const studentSortKey = useDictStore((s) => s.prefs.studentSortKey);
+  const studentSortDir = useDictStore((s) => s.prefs.studentSortDir);
+  const studentLastActivity = useDictStore((s) => s.studentLastActivity);
+
+  const sortedStudents = useMemo(
+    () =>
+      sortStudents(
+        managedStudents,
+        studentLastActivity,
+        studentSortKey,
+        studentSortDir,
+      ),
+    [managedStudents, studentLastActivity, studentSortKey, studentSortDir],
+  );
 
   const [open, setOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
@@ -90,10 +109,10 @@ export function StudentSwitcher() {
                 }
               }}
             />
-            {managedStudents.length > 0 && (
+            {sortedStudents.length > 0 && (
               <div className="my-1 border-t border-stone-100" />
             )}
-            {managedStudents.map((s) => (
+            {sortedStudents.map((s) => (
               <MenuItem
                 key={s.id}
                 active={currentManagedStudentId === s.id}
