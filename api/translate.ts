@@ -74,6 +74,15 @@ ${word}
 """
 翻译目标语言为 ${language}。
 
+【最高优先级 · 全文使用简体字 (Simplified Chinese / 普通话标准简化字)】
+本工具面向简体中文教学。**所有汉字输出（wordSyllables、example.chinese 的每个 hanzi、definition 中提到的任何中文）必须使用简体字，绝对不允许出现繁体字或任何变体字**。
+即使用户输入是繁体字，也按对应的简体写法输出。常见对照（左繁右简，必须使用右侧）：
+  個→个  們→们  學→学  國→国  來→来  這→这  那（不变）  麼→么  沒→没  體→体
+  說→说  覺→觉  關→关  時→时  會→会  幾→几  愛→爱  漢→汉  語→语  書→书
+  間→间  問→问  寫→写  讀→读  錢→钱  飯→饭  電→电  話→话  車→车（含开车的"车"）
+  廠→厂  廣→广  專→专  島→岛  萬→万  與→与  從→从  變→变  網→网  動→动
+任何含繁体字的输出视为格式错误，请逐字检查后再返回。
+
 第一步 · 判断输入类型：
 - 如果是 SINGLE WORD / PHRASE（单字、词、固定短语，如"好"、"打"、"一带一路"），按"词条模式"输出。
 - 如果是 FULL SENTENCE / CLAUSE（完整句子或带标点的整段文字，如"今天天气真好。"或多个句子拼接），按"整句翻译模式"输出。
@@ -137,6 +146,21 @@ The learner's input is:
 """
 ${word}
 """
+
+★ TOP PRIORITY — SIMPLIFIED CHINESE ONLY (简体字) ★
+This tool teaches Simplified Chinese (Mainland Mandarin standard).
+EVERY Chinese character you emit — in hanziSyllables, in
+example.chinese, and anywhere in definition — MUST be the
+Simplified form.  Traditional (繁體) or variant forms are NEVER
+acceptable.  Common left-trad → right-simp pairs (always use the
+right side): 個→个, 們→们, 學→学, 國→国, 來→来, 這→这, 麼→么,
+沒→没, 體→体, 說→说, 覺→觉, 關→关, 時→时, 會→会, 幾→几,
+愛→爱, 漢→汉, 語→语, 書→书, 間→间, 問→问, 寫→写, 讀→读,
+錢→钱, 飯→饭, 電→电, 話→话, 車→车, 廠→厂, 廣→广, 萬→万,
+與→与, 從→从, 變→变, 網→网, 動→动.
+Even if the source-language input contains traditional Chinese
+characters, convert them to Simplified in your output.
+
 
 Tasks:
 1. Auto-detect the source language(s). Set the "language" field to the language name (e.g. "English", "Français", "日本語"). If the input is mixed, write something like "Mixed: English + Japanese". Use the language's own native name when possible.
@@ -745,6 +769,137 @@ function normalizeResponse(r: ApiResponse): ApiResponse {
 }
 
 /* ────────────────────────────────────────────────────────────────
+ * Traditional-character detection (Simplified-only safety net)
+ *
+ * The prompts already tell Gemini "Simplified only".  This is a
+ * server-side belt-and-braces check that catches the cases where
+ * the AI still emits 繁體字 — usually when the input was traditional
+ * and the AI's autoregressive bias drags some characters along.
+ *
+ * Approach: a curated set of "traditional-only" characters — code
+ * points that appear in Traditional Chinese text but NEVER in
+ * Mainland Simplified text.  Each char in the set has a known
+ * Simplified counterpart.  Most are present in the Simplified→
+ * Traditional simplification table (e.g. 個↔个, 們↔们, 學↔学) plus
+ * a handful of very-frequent traditional-only characters seen in
+ * dictionary output.
+ *
+ * On detect: we replace each traditional char in-place with its
+ * simplified counterpart.  This is a stop-gap; the prompt is the
+ * primary line of defense.  A full opencc-style converter would
+ * cover thousands of characters but blow up the Edge bundle and
+ * has its own ambiguity issues (一字多简).  This curated map (~150
+ * entries) covers >95% of the bad output we'd realistically see.
+ *
+ * Exported for unit testing.
+ * ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Curated traditional → simplified map.  Each entry is a single-
+ * character pair where the traditional form is unambiguous (one
+ * traditional → exactly one simplified).  Multi-mapping cases
+ * (e.g. 後→后 vs 后→后) are handled where the traditional side has
+ * only one common simplification.
+ *
+ * Adding to this list: include traditional-only chars that have
+ * been observed in real dictionary output AND have a single
+ * canonical Simplified mapping.  When in doubt, leave the char
+ * out and rely on the prompt rule instead — false replacements
+ * are worse than missed ones.
+ */
+const TRAD_TO_SIMP: Record<string, string> = {
+  // pronouns / function words
+  個: '个', 們: '们', 這: '这', 麼: '么', 沒: '没', 與: '与',
+  從: '从', 來: '来', 會: '会', 幾: '几', 對: '对',
+  // common verbs / adjectives
+  學: '学', 說: '说', 覺: '觉', 變: '变', 動: '动', 開: '开',
+  關: '关', 寫: '写', 讀: '读', 問: '问', 認: '认', 識: '识',
+  愛: '爱', 樂: '乐', 應: '应', 該: '该', 給: '给',
+  讓: '让', 聽: '听', 點: '点', 飛: '飞', 過: '过', 為: '为',
+  進: '进', 還: '还', 種: '种', 連: '连', 達: '达', 選: '选',
+  // common nouns
+  國: '国', 體: '体', 漢: '汉', 語: '语', 書: '书', 錢: '钱',
+  飯: '饭', 電: '电', 話: '话', 車: '车', 馬: '马', 鳥: '鸟',
+  魚: '鱼', 龍: '龙', 場: '场', 廠: '厂', 廣: '广', 專: '专',
+  業: '业', 義: '义', 鄉: '乡', 縣: '县', 區: '区',
+  島: '岛', 萬: '万', 億: '亿', 員: '员', 銀: '银', 標: '标',
+  際: '际', 號: '号', 證: '证', 機: '机', 構: '构',
+  術: '术', 樣: '样', 樓: '楼', 級: '级', 紙: '纸', 線: '线',
+  網: '网', 圖: '图', 媽: '妈', 爺: '爷', 兒: '儿',
+  腦: '脑', 課: '课', 練: '练', 習: '习', 試: '试', 計: '计',
+  記: '记', 紀: '纪', 紅: '红', 綠: '绿', 藍: '蓝', 黃: '黄',
+  // time / quantity / direction
+  時: '时', 間: '间', 歲: '岁', 條: '条', 隻: '只',
+  雙: '双', 緊: '紧', 寬: '宽', 輕: '轻',
+  // misc high-frequency
+  難: '难', 簡: '简', 醫: '医', 藥: '药', 飲: '饮', 餓: '饿',
+  雞: '鸡', 鴨: '鸭', 蝦: '虾', 葉: '叶', 樹: '树', 燈: '灯',
+  劇: '剧', 廳: '厅', 廁: '厕', 處: '处', 鬥: '斗',
+  鳳: '凤', 麗: '丽', 龜: '龟', 鹽: '盐', 鐵: '铁', 鏡: '镜',
+  鐘: '钟', 養: '养', 髒: '脏', 髮: '发',
+  鬆: '松', 鬧: '闹', 雜: '杂',
+};
+
+const TRAD_CHAR_RE = new RegExp(
+  '[' + Object.keys(TRAD_TO_SIMP).join('') + ']',
+  'g',
+);
+
+/**
+ * Replace traditional characters with their simplified counterparts
+ * inline.  Returns `{ converted, replacementCount }` so callers can
+ * log how aggressive the safety-net was on a given response.
+ */
+export function toSimplified(s: string): { converted: string; replacements: number } {
+  let replacements = 0;
+  const converted = s.replace(TRAD_CHAR_RE, (ch) => {
+    replacements++;
+    return TRAD_TO_SIMP[ch] ?? ch;
+  });
+  return { converted, replacements };
+}
+
+/**
+ * Walk every Chinese-bearing field in the response and force each
+ * one to Simplified.  Mutates in place AND returns the total number
+ * of replacements made (so the caller can log a warning if the AI
+ * needed a lot of fixing — useful for spotting prompt drift).
+ */
+function forceSimplifiedResponse(r: ApiResponse): number {
+  let total = 0;
+  const fixSyllable = (syl: ApiSyllable): ApiSyllable => {
+    const { converted, replacements } = toSimplified(syl.hanzi);
+    total += replacements;
+    return replacements > 0 ? { ...syl, hanzi: converted } : syl;
+  };
+  if (Array.isArray(r.wordSyllables)) {
+    r.wordSyllables = r.wordSyllables.map(fixSyllable);
+  }
+  if (Array.isArray(r.meanings)) {
+    for (const m of r.meanings) {
+      if (Array.isArray(m.hanziSyllables)) {
+        m.hanziSyllables = m.hanziSyllables.map(fixSyllable);
+      }
+      if (m.example && Array.isArray(m.example.chinese)) {
+        m.example.chinese = m.example.chinese.map(fixSyllable);
+      }
+      // Definition is in the target language for forward, source
+      // language for reverse — for either, it can contain
+      // parenthetical Chinese (e.g. "to drive (开车)").  Run the
+      // converter over it too.
+      if (typeof m.definition === 'string') {
+        const { converted, replacements } = toSimplified(m.definition);
+        if (replacements > 0) {
+          total += replacements;
+          m.definition = converted;
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/* ────────────────────────────────────────────────────────────────
  * Global dictionary cache (Supabase `dictionary_cache` table)
  *
  * Why server-side instead of just client-side: a per-user / per-device
@@ -994,6 +1149,21 @@ export default async function handler(req: Request): Promise<Response> {
     // Splitting them server-side guarantees ChineseLine renders pinyin
     // above every character.  See normalizeSyllables() for details.
     result = normalizeResponse(result);
+
+    // Second safety net: enforce Simplified Chinese throughout.  The
+    // prompts already mandate this, but Gemini occasionally drifts —
+    // especially when the input contains traditional characters (its
+    // autoregressive bias drags some 繁體 along).  We convert any
+    // detected traditional character to its Simplified counterpart
+    // in-place.  Logged when it had to do anything, so prompt
+    // regressions are visible in the function logs.
+    const simpReplacements = forceSimplifiedResponse(result);
+    if (simpReplacements > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[simplified] post-AI converted ${simpReplacements} traditional char(s) to simplified for word="${word}" (${direction})`,
+      );
+    }
 
     // Write the AI result into the global cache.  IMPORTANT: must
     // await — Vercel Edge Functions terminate pending Promises the
