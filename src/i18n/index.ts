@@ -152,7 +152,7 @@ const DICT = {
     exportFailed: (v: Vars) => `Export failed: ${v.msg}`,
 
     nothingToExport: 'No entries to export',
-    pptFooterBrand: 'note.neooccidental.com · Classroom Chinese Lookup',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) =>
       `${v.n} ${Number(v.n) === 1 ? 'entry' : 'entries'}`,
     pptGroupCount: (v: Vars) =>
@@ -358,7 +358,7 @@ const DICT = {
     exportFailed: (v: Vars) => `导出失败：${v.msg}`,
 
     nothingToExport: '没有可导出的词条',
-    pptFooterBrand: 'note.neooccidental.com · 课堂中文速查',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) => `共 ${v.n} 个词条`,
     pptGroupCount: (v: Vars) => `${v.n} 组课程 / 日期`,
 
@@ -575,7 +575,7 @@ const DICT = {
     exportFailed: (v: Vars) => `Exportación fallida: ${v.msg}`,
 
     nothingToExport: 'No hay entradas para exportar',
-    pptFooterBrand: 'note.neooccidental.com · Diccionario de chino para clase',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) =>
       `${v.n} entrada${Number(v.n) === 1 ? '' : 's'}`,
     pptGroupCount: (v: Vars) =>
@@ -794,7 +794,7 @@ const DICT = {
     exportFailed: (v: Vars) => `Export fehlgeschlagen: ${v.msg}`,
 
     nothingToExport: 'Keine Einträge zum Exportieren',
-    pptFooterBrand: 'note.neooccidental.com · Chinesisch-Schnellnachschlag',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) =>
       `${v.n} ${Number(v.n) === 1 ? 'Eintrag' : 'Einträge'}`,
     pptGroupCount: (v: Vars) =>
@@ -1013,7 +1013,7 @@ const DICT = {
     exportFailed: (v: Vars) => `Échec de l’export : ${v.msg}`,
 
     nothingToExport: 'Aucune entrée à exporter',
-    pptFooterBrand: 'note.neooccidental.com · Recherche rapide de chinois',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) =>
       `${v.n} entrée${Number(v.n) === 1 ? '' : 's'}`,
     pptGroupCount: (v: Vars) =>
@@ -1227,7 +1227,7 @@ const DICT = {
     exportFailed: (v: Vars) => `エクスポート失敗：${v.msg}`,
 
     nothingToExport: 'エクスポートできる項目がありません',
-    pptFooterBrand: 'note.neooccidental.com · 授業向け中国語クイック検索',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) => `${v.n} 件`,
     pptGroupCount: (v: Vars) => `${v.n} 授業 / 日付`,
 
@@ -1439,7 +1439,7 @@ const DICT = {
     exportFailed: (v: Vars) => `내보내기 실패: ${v.msg}`,
 
     nothingToExport: '내보낼 항목 없음',
-    pptFooterBrand: 'note.neooccidental.com · 수업용 중국어 빠른 검색',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) => `항목 ${v.n}개`,
     pptGroupCount: (v: Vars) => `수업 / 날짜 ${v.n}개`,
 
@@ -1652,7 +1652,7 @@ const DICT = {
     exportFailed: (v: Vars) => `Ошибка экспорта: ${v.msg}`,
 
     nothingToExport: 'Нет записей для экспорта',
-    pptFooterBrand: 'note.neooccidental.com · Быстрый поиск китайского',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) => `Записей: ${v.n}`,
     pptGroupCount: (v: Vars) => `${v.n} урок(а/ов) / дат(а/ы)`,
 
@@ -1864,7 +1864,7 @@ const DICT = {
     exportFailed: (v: Vars) => `فشل التصدير: ${v.msg}`,
 
     nothingToExport: 'لا توجد إدخالات للتصدير',
-    pptFooterBrand: 'note.neooccidental.com · بحث سريع للصينية',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
     pptEntriesCount: (v: Vars) => `${v.n} إدخال`,
     pptGroupCount: (v: Vars) => `${v.n} درس / تاريخ`,
 
