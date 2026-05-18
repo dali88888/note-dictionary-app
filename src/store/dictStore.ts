@@ -981,57 +981,74 @@ export const useDictStore = create<DictState>()(
         const ctx = get().currentManagedStudentId;
 
         try {
-          // Build queries scoped to (owner = me) AND (managed_student = ctx | null)
-          let entriesQ = supabase
-            .from('entries')
-            .select('*')
-            .eq('owner_user_id', userId)
-            .order('queried_at', { ascending: false });
-          entriesQ =
-            ctx === null
-              ? entriesQ.is('managed_student_id', null)
-              : entriesQ.eq('managed_student_id', ctx);
+          // ⚠️ Hydrate moved off supabase-js to raw fetch.  Field-
+          // reported: after a tab has been open many hours (or
+          // resumed from system sleep / Chrome throttling), the
+          // supabase-js client's READ fetch socket wedges the same
+          // way its WRITE socket did before we routed writes to raw
+          // fetch.  Symptom: `supabase.from('entries').select(...)`
+          // never resolves, hydrate hangs, in-memory state stays
+          // empty, History view appears blank even though all data
+          // is intact in the cloud.  Diagnosed on 2026-05-18 in a
+          // teacher account with 595 entries across 12 students —
+          // in-memory count was 0.
+          //
+          // restSelect uses the same raw-fetch + Promise.race(10s)
+          // + auto-refresh-on-401 pipeline as writes.  Same idea,
+          // applied to reads.
+          //
+          // Build queries scoped to (owner = me) AND (managed_student = ctx | null).
+          const entriesQuery =
+            `owner_user_id=eq.${userId}` +
+            (ctx === null
+              ? '&managed_student_id=is.null'
+              : `&managed_student_id=eq.${ctx}`) +
+            // Bump the row cap above PostgREST's default 1000 in case
+            // a long-running teacher has accumulated thousands of
+            // entries.  We re-paginate if even 5000 isn't enough.
+            `&order=queried_at.desc&select=*&limit=5000`;
+          const entriesP = restSelect<EntryRow>('entries', entriesQuery);
 
-          let sessQ = supabase
-            .from('class_sessions')
-            .select('*')
-            .eq('owner_user_id', userId)
-            .order('created_at', { ascending: false });
-          sessQ =
-            ctx === null
-              ? sessQ.is('managed_student_id', null)
-              : sessQ.eq('managed_student_id', ctx);
+          const sessQuery =
+            `owner_user_id=eq.${userId}` +
+            (ctx === null
+              ? '&managed_student_id=is.null'
+              : `&managed_student_id=eq.${ctx}`) +
+            `&order=created_at.desc&select=*&limit=5000`;
+          const sessP = restSelect<SessionRow>('class_sessions', sessQuery);
 
           // Always fetch the managed-student roster too — RLS gates this
           // by teacher_id, so it returns [] for student accounts.
-          const studentsQ = supabase
-            .from('managed_students')
-            .select('*')
-            .eq('teacher_id', userId)
-            .order('created_at', { ascending: true });
+          const studentsP = restSelect<ManagedStudentRow>(
+            'managed_students',
+            `teacher_id=eq.${userId}&order=created_at.asc&select=*`,
+          );
 
           const [entriesRes, sessRes, studentsRes] = await Promise.all([
-            entriesQ,
-            sessQ,
-            studentsQ,
+            entriesP,
+            sessP,
+            studentsP,
           ]);
-          if (entriesRes.error) throw entriesRes.error;
-          if (sessRes.error) throw sessRes.error;
-          if (studentsRes.error) throw studentsRes.error;
-          const studentRows = (studentsRes.data ?? []) as ManagedStudentRow[];
+          if (entriesRes.error) throw new Error(entriesRes.error.message);
+          if (sessRes.error) throw new Error(sessRes.error.message);
+          if (studentsRes.error) throw new Error(studentsRes.error.message);
+          const studentRows: ManagedStudentRow[] =
+            (studentsRes.data ?? []) as ManagedStudentRow[];
 
           const entryRows = (entriesRes.data ?? []) as EntryRow[];
           const sessRows = (sessRes.data ?? []) as SessionRow[];
 
           // Fetch session_entries links for our sessions only.
+          // PostgREST `in.(...)` accepts a comma-separated list.
           const sessIds = sessRows.map((s) => s.id);
           let links: SessionEntryRow[] = [];
           if (sessIds.length > 0) {
-            const linksRes = await supabase
-              .from('session_entries')
-              .select('session_id, entry_id')
-              .in('session_id', sessIds);
-            if (linksRes.error) throw linksRes.error;
+            const inList = sessIds.map((id) => `"${id}"`).join(',');
+            const linksRes = await restSelect<SessionEntryRow>(
+              'session_entries',
+              `session_id=in.(${inList})&select=session_id,entry_id&limit=50000`,
+            );
+            if (linksRes.error) throw new Error(linksRes.error.message);
             links = (linksRes.data ?? []) as SessionEntryRow[];
           }
 
