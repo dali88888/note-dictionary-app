@@ -103,6 +103,13 @@ ${word}
      ★ 例句中**必须把被查询的"${word}"按原样写出**（连续子串，原字一字不差）。允许在例句中加入其他成分，但绝不允许只出现"${word}"的一部分、同义改写、或省略某个字。
      ★ 例句应清楚体现该 meaning 的具体用法 —— 例如"天"作"日子/时间"义时，例句不能只是写一个气象场景，而要在例句中真正用"天"表达"日子"的意思（如"过了几天"、"那天我去了…"）。
      ★ 不同 meaning 的例句应使用不同语境，避免雷同。
+     ★ **example.translation 必须是中文例句的"直译" / literal translation，不是意译**。本工具的核心用途是给二语学习者建立中文词 ↔ 目标语词的一一对应；意译会让学生看不出哪个中文词对应哪个目标语词。具体规则：
+       (a) 中文里每个实词（动词、名词、形容词、副词）必须能在译文中找到对应的目标语词，**词性保持一致**。中文是动词的，译文里也应是动词；中文是名词的，译文里也应是名词。
+       (b) **错误意译示例**（不要这样译）：中文"明天我去健身。" → "I am going to the gym tomorrow."  ← "健身"在中文里是动词（to work out），却被译成了名词"the gym"；学生看不出"健身"对应哪个英文词。
+       (c) **正确直译示例**：中文"明天我去健身。" → "Tomorrow I go to work out." 或 "Tomorrow I will go work out."  ← "明天=tomorrow, 我=I, 去=go, 健身=work out"，词对词、词性对词性。
+       (d) 再举一例：中文"她在做饭。" → 正确："She is making food." 或 "She is cooking food."  错误："She is cooking."（"饭"没有对应词，丢了对应关系）
+       (e) 在不严重违反目标语法的前提下，**优先词序、词性、词数对应**；只有当严格直译会导致语法明显错误时，才允许微调，且要尽量保留对应关系。
+       (f) 中文虚词（了、的、吗、呢、得、过、着 等结构助词/语气助词）不强制对应 —— 这些词在很多目标语里没有直接对等物，按目标语习惯处理即可。
 5. 例句拆分为 Syllable 数组（见下方"Syllable 拆分规则"）。
 6. wordSyllables 同样按 Syllable 拆分规则给出该词的主拼音读法（多音字取最常用，且包含轻声标注）。
 7. partOfSpeech、definition、example.translation 全部使用 ${language} 书写。
@@ -177,6 +184,13 @@ Tasks:
          chinese: a natural, idiomatic Chinese sentence USING THIS CANDIDATE, broken per-character with pinyin.
            ★ STRICT: the example MUST contain the candidate's hanzi (the value of hanziSyllables joined together) as a contiguous substring — written exactly the same way, character for character. Do NOT replace it with a synonym or write only part of it.
          translation: that sentence's equivalent in the SOURCE LANGUAGE.
+           ★ The translation MUST be a LITERAL / word-for-word translation of the Chinese sentence, NOT a free / idiomatic one.  This tool's core use is helping second-language learners see the one-to-one mapping between Chinese words and source-language words; idiomatic translations hide which Chinese word maps to which source-language word.  Specific rules:
+             (a) Every content word in the Chinese (verb, noun, adjective, adverb) must have a corresponding word in the translation, and the PART OF SPEECH must match — a Chinese verb is rendered as a verb in the source language, a Chinese noun as a noun, etc.
+             (b) WRONG (idiomatic): Chinese "明天我去健身。" → "I am going to the gym tomorrow."  ← 健身 is a verb (to work out), but it got rendered as the noun "the gym"; the learner can't see which English word corresponds to 健身.
+             (c) RIGHT (literal): Chinese "明天我去健身。" → "Tomorrow I go to work out."  ← 明天=tomorrow, 我=I, 去=go, 健身=work out; word-for-word, part-of-speech for part-of-speech.
+             (d) Another example: Chinese "她在做饭。" — RIGHT: "She is making food." or "She is cooking food."  WRONG: "She is cooking." (饭 has no corresponding word; the learner loses the mapping).
+             (e) Prioritize word-order, part-of-speech, and word-count correspondence UNLESS strict literal would produce an outright ungrammatical sentence in the source language; only then minimally adjust, and preserve as much correspondence as possible.
+             (f) Chinese function particles (了, 的, 吗, 呢, 得, 过, 着 etc.) are NOT required to have direct counterparts — many source languages have no equivalent and handling them per the source language's normal grammar is fine.
        For FULL SENTENCE inputs: set example to { "chinese": [], "translation": "" } — empty arrays/strings, no example needed because the candidate IS the translation already.
 4. Top-level fields:
    - word: echo the learner's original input verbatim.
