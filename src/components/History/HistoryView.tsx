@@ -92,6 +92,43 @@ export function HistoryView() {
     return () => window.removeEventListener('keydown', onKey);
   }, [previewEntryId]);
 
+  // Session-detail modal: clicking a group's title (or its "+N more"
+  // chip) opens the FULL entry list for that session.  The inline
+  // chips under each group are capped at 20 for layout sanity, which
+  // previously made the overflow entries unreachable on this page —
+  // the "+N more" text was decorative.  The modal reuses
+  // AllEntriesList, so every row gets pinyin, click-to-preview, and
+  // an explicit delete button for free.
+  //
+  // Derivations read the LIVE store maps (sessions/entries) rather
+  // than a snapshot, so deleting an entry from within the modal
+  // re-renders the list minus that row immediately.
+  const [detailSessionId, setDetailSessionId] = useState<string | null>(null);
+  const detailSession = detailSessionId
+    ? sessions.find((s) => s.id === detailSessionId) ?? null
+    : null;
+  const detailEntries = useMemo(
+    () =>
+      detailSession
+        ? detailSession.entryIds
+            .map((id) => entries[id])
+            .filter((e): e is DictionaryEntry => Boolean(e))
+            .sort((a, b) => b.queriedAt - a.queriedAt)
+        : [],
+    [detailSession, entries],
+  );
+  // ESC closes the TOPMOST dialog only: preview (z-30) sits above the
+  // detail modal (z-20), so when both are open ESC dismisses preview
+  // first (handled by the effect above) and this one stays inert.
+  useEffect(() => {
+    if (!detailSessionId || previewEntryId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDetailSessionId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detailSessionId, previewEntryId]);
+
   const allEntries = useMemo(
     () => Object.values(entries).sort((a, b) => b.queriedAt - a.queriedAt),
     [entries],
@@ -177,6 +214,7 @@ export function HistoryView() {
               onToggle={toggleSession}
               onDelete={(id) => deleteSession(id, false)}
               onPreview={setPreviewEntryId}
+              onOpenDetail={setDetailSessionId}
               emptyText={t('emptyByDate')}
             />
           )}
@@ -188,6 +226,7 @@ export function HistoryView() {
               onToggle={toggleSession}
               onDelete={(id) => deleteSession(id, false)}
               onPreview={setPreviewEntryId}
+              onOpenDetail={setDetailSessionId}
               emptyText={t('emptyByClass')}
             />
           )}
@@ -258,6 +297,54 @@ export function HistoryView() {
           )}
         </aside>
       </div>
+
+      {/* Session-detail modal (z-20, sits UNDER the preview modal so
+          clicking a row inside it pops the ResultCard on top).  Shows
+          the complete entry list for one date/class group — pinyin,
+          click-to-preview, and per-entry delete all come from reusing
+          AllEntriesList.  Pinyin is forced ON here regardless of the
+          global toggle: surfacing readings was the explicit point of
+          this list. */}
+      {detailSession && (
+        <div
+          className="fixed inset-0 z-20 bg-black/40 flex items-start justify-center px-4 py-8 overflow-y-auto"
+          onClick={() => setDetailSessionId(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-3xl bg-white rounded-xl border border-stone-200 shadow-xl"
+          >
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-stone-200">
+              <span className="font-semibold text-stone-800">
+                {detailSession.name}
+              </span>
+              <span className="text-xs text-stone-500">
+                {detailSession.kind === 'auto' ? t('autoArchive') : t('manualClass')}
+              </span>
+              <span className="text-xs text-stone-500">
+                {t('wordsUnit', { n: detailEntries.length })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDetailSessionId(null)}
+                aria-label={t('closeBtn')}
+                title={t('closeBtn')}
+                className="ml-auto w-8 h-8 rounded-full text-stone-400 hover:bg-stone-100 hover:text-stone-700 text-lg leading-none flex items-center justify-center"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-3 max-h-[70vh] overflow-y-auto">
+              <AllEntriesList
+                entries={detailEntries}
+                onDelete={deleteEntry}
+                onPreview={setPreviewEntryId}
+                showPinyin={true}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Click-to-preview modal.  Renders the full ResultCard for the
           clicked entry, with hideDelete=true so the only × control is
@@ -397,6 +484,7 @@ function SessionGroupList({
   onToggle,
   onDelete,
   onPreview,
+  onOpenDetail,
   emptyText,
 }: {
   sessions: ClassSession[];
@@ -405,6 +493,7 @@ function SessionGroupList({
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onPreview: (id: string) => void;
+  onOpenDetail: (id: string) => void;
   emptyText: string;
 }) {
   const { t } = useT();
@@ -434,7 +523,17 @@ function SessionGroupList({
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-semibold text-stone-800">{sess.name}</span>
+                  {/* Group title opens the full-entry modal — the inline
+                      chips below are capped at 20, so this is the way to
+                      reach every query in the group. */}
+                  <button
+                    type="button"
+                    onClick={() => onOpenDetail(sess.id)}
+                    title={t('viewAllHint')}
+                    className="font-semibold text-stone-800 hover:text-amber-700 hover:underline underline-offset-2 cursor-pointer"
+                  >
+                    {sess.name}
+                  </button>
                   <span className="text-xs text-stone-500">
                     {sess.kind === 'auto' ? t('autoArchive') : t('manualClass')}
                   </span>
@@ -501,9 +600,17 @@ function SessionGroupList({
                   );
                 })}
                 {entries.length > 20 && (
-                  <span className="text-xs text-stone-400 self-center">
+                  // Was a dead grey span — the overflow entries were
+                  // unreachable from this page.  Now opens the same
+                  // full-list modal as clicking the group title.
+                  <button
+                    type="button"
+                    onClick={() => onOpenDetail(sess.id)}
+                    title={t('viewAllHint')}
+                    className="text-xs text-amber-700 self-center hover:underline underline-offset-2 cursor-pointer"
+                  >
                     {t('moreN', { n: entries.length - 20 })}
-                  </span>
+                  </button>
                 )}
               </div>
             )}

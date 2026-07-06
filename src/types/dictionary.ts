@@ -132,6 +132,7 @@ export const PRESET_LANGUAGES = [
   '한국어',
   'Русский',
   'العربية',
+  'Dansk',
 ] as const;
 
 export type PresetLanguage = (typeof PRESET_LANGUAGES)[number];

@@ -97,8 +97,11 @@ export function StudentSwitcher() {
           </svg>
         </button>
 
+        {/* Menu is capped at 60vh with its own scrollbar: with a long
+            student roster it used to extend past the viewport bottom
+            with no way to reach the last students. */}
         {open && (
-          <div className="absolute right-0 mt-1 w-60 bg-white border border-stone-200 rounded-md shadow-lg z-20 py-1">
+          <div className="absolute right-0 mt-1 w-60 bg-white border border-stone-200 rounded-md shadow-lg z-20 py-1 max-h-[60vh] overflow-y-auto">
             <MenuItem
               active={currentManagedStudentId === null}
               label={t('contextSelf')}

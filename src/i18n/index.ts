@@ -10,7 +10,10 @@
  */
 
 export const UI_LANGS = [
-  'en', 'zh', 'es', 'de', 'fr', 'ja', 'ko', 'ru', 'ar',
+  // 'da' sits at the END by explicit user request ("最下面添加丹麦语") —
+  // and PRESET_LANGUAGES must mirror this order exactly (enforced by
+  // src/types/PRESET_LANGUAGES.test.ts).
+  'en', 'zh', 'es', 'de', 'fr', 'ja', 'ko', 'ru', 'ar', 'da',
 ] as const;
 export type UILang = (typeof UI_LANGS)[number];
 
@@ -26,6 +29,7 @@ export const UI_LANG_LABEL: Record<UILang, string> = {
   ko: '한국어',
   ru: 'Русский',
   ar: 'العربية',
+  da: 'Dansk',
 };
 
 /** RTL locales — App.tsx uses this to set `document.documentElement.dir`. */
@@ -105,6 +109,7 @@ const DICT = {
     deleteRecord: 'Delete this record',
     refreshTooltip: 'Re-query (skip cache)',
     previewEntryHint: 'Click to view full definition',
+    viewAllHint: 'Click to see every query in this group',
 
     registerCasual: 'casual',
     registerColloquial: 'colloquial',
@@ -316,6 +321,7 @@ const DICT = {
     deleteRecord: '删除此记录',
     refreshTooltip: '重新查询（跳过缓存）',
     previewEntryHint: '点击查看完整释义',
+    viewAllHint: '点击查看该组的全部查询',
 
     registerCasual: '口语',
     registerColloquial: '通俗',
@@ -528,6 +534,7 @@ const DICT = {
     deleteRecord: 'Eliminar este registro',
     refreshTooltip: 'Volver a consultar (omitir caché)',
     previewEntryHint: 'Haz clic para ver la definición completa',
+    viewAllHint: 'Haz clic para ver todas las búsquedas de este grupo',
 
     registerCasual: 'casual',
     registerColloquial: 'coloquial',
@@ -747,6 +754,7 @@ const DICT = {
     deleteRecord: 'Diesen Eintrag löschen',
     refreshTooltip: 'Erneut abfragen (Cache überspringen)',
     previewEntryHint: 'Zum Anzeigen der vollständigen Definition klicken',
+    viewAllHint: 'Klicken, um alle Abfragen dieser Gruppe zu sehen',
 
     registerCasual: 'umgangssprachlich',
     registerColloquial: 'kolloquial',
@@ -966,6 +974,7 @@ const DICT = {
     deleteRecord: 'Supprimer cet enregistrement',
     refreshTooltip: 'Rechercher à nouveau (ignorer le cache)',
     previewEntryHint: 'Cliquez pour voir la définition complète',
+    viewAllHint: 'Cliquez pour voir toutes les recherches de ce groupe',
 
     registerCasual: 'familier',
     registerColloquial: 'courant',
@@ -1182,6 +1191,7 @@ const DICT = {
     deleteRecord: 'この記録を削除',
     refreshTooltip: '再検索（キャッシュをスキップ）',
     previewEntryHint: 'クリックして完全な定義を表示',
+    viewAllHint: 'クリックしてこのグループの全クエリを表示',
 
     registerCasual: 'カジュアル',
     registerColloquial: '口語',
@@ -1394,6 +1404,7 @@ const DICT = {
     deleteRecord: '이 기록 삭제',
     refreshTooltip: '다시 검색 (캐시 건너뛰기)',
     previewEntryHint: '클릭하면 전체 정의 보기',
+    viewAllHint: '클릭하면 이 그룹의 모든 검색 보기',
 
     registerCasual: '캐주얼',
     registerColloquial: '구어',
@@ -1607,6 +1618,7 @@ const DICT = {
     deleteRecord: 'Удалить эту запись',
     refreshTooltip: 'Повторить запрос (без кэша)',
     previewEntryHint: 'Нажмите, чтобы увидеть полное определение',
+    viewAllHint: 'Нажмите, чтобы увидеть все запросы этой группы',
 
     registerCasual: 'разговорный',
     registerColloquial: 'обиходный',
@@ -1819,6 +1831,7 @@ const DICT = {
     deleteRecord: 'حذف هذا السجل',
     refreshTooltip: 'إعادة البحث (تجاوز ذاكرة التخزين المؤقت)',
     previewEntryHint: 'انقر لعرض التعريف الكامل',
+    viewAllHint: 'انقر لعرض جميع استعلامات هذه المجموعة',
 
     registerCasual: 'عامي',
     registerColloquial: 'محكي',
@@ -1964,6 +1977,226 @@ const DICT = {
     historyAnonTitle: 'يتطلب السجل حسابًا',
     historyAnonBody:
       'الاستعلامات المجهولة لا تُحفظ في السحابة. سجّل، وستُؤرشف كل استعلاماتك تلقائيًا حسب التاريخ والدرس، جاهزة للمراجعة والتصدير إلى PPT.',
+  },
+
+  /* ─────────────────────────── Danish ─────────────────────────── */
+  da: {
+    appTitle: 'Dictionary & Note',
+    tabSearch: 'Opslag',
+    tabHistory: 'Historik & eksport',
+
+    pinyin: 'Pinyin',
+    uiLangLabel: 'UI',
+    translateTo: 'Oversæt til',
+    otherLang: 'Andet…',
+    otherLangWith: (v: Vars) => `Andet: ${v.value}`,
+
+    customLangTitle: 'Brugerdefineret målsprog',
+    customLangHint: 'Indtast et hvilket som helst sprognavn (f.eks. "Tiếng Việt", "Português", "हिन्दी").',
+    customLangPlaceholder: 'Sprognavn',
+    cancel: 'Annuller',
+    confirm: 'OK',
+
+    startNewClass: '+ Ny lektion',
+    endClass: 'Afslut lektion',
+    currentClass: 'Lektion',
+    wordsUnit: (v: Vars) => `· ${v.n} ord`,
+    classNamePlaceholder: 'Lektionsnavn, f.eks. Business-kinesisk 3',
+    start: 'Start',
+
+    searchPlaceholder: 'Indtast et ord eller en sætning på et hvilket som helst sprog (f.eks. 长 / happy / 一带一路 / 我想去中国旅行。)',
+    reverseSearchPlaceholder:
+      'Indtast et ord eller en sætning på et hvilket som helst sprog (f.eks. happy / je suis fatigué / "I want to travel to China")',
+    searchBtn: 'Søg',
+    searchLoading: 'Søger…',
+    searchHint: 'Enter for at søge · Shift+Enter for ny linje · sætninger får kun en oversættelse, intet eksempel',
+
+    /* Direction toggle */
+    dirZhToOther: 'Kinesisk → Andet',
+    dirOtherToZh: 'Andet → Kinesisk',
+    dirZhToOtherShort: 'ZH→',
+    dirOtherToZhShort: '→ZH',
+    targetIsChinese: '→ Kinesisk',
+    detectedLanguage: (v: Vars) => `Registreret: ${v.lang}`,
+
+    queryFailed: (v: Vars) => `Opslag mislykkedes: ${v.msg}`,
+    pendingPersistsCount: (v: Vars) =>
+      Number(v.n) === 1
+        ? '1 opslag venter på synkronisering'
+        : `${v.n} opslag venter på synkronisering`,
+    pendingPersistsRetry: 'Prøv igen nu',
+    pendingPersistsDiscard: 'Kassér',
+    pendingPersistsDiscardConfirm:
+      'Kassér ikke-gemte opslag? Dette er permanent, og dataene findes ikke i skyen.',
+    emptyHint:
+      'Skriv et ord eller en sætning på et hvilket som helst sprog ovenfor for at starte. Opslag arkiveres automatisk efter dato og kan eksporteres som PPT efter lektionen.',
+    emptyHintReverse:
+      'Indtast et ord eller en sætning på et hvilket som helst sprog og få idiomatiske kinesiske udtryk.',
+
+    translatedToLine: (v: Vars) =>
+      `Oversat til ${v.lang} · ${v.n} betydning${Number(v.n) === 1 ? '' : 'er'}`,
+    sentenceTranslatedTo: (v: Vars) => `Sætningsoversættelse · ${v.lang}`,
+    cacheHitBadge: 'Cachelagret',
+    cacheHitTooltip:
+      'Dette opslag findes allerede i dit bibliotek; genbrugt med det samme uden AI-forbrug.',
+    chineseCandidatesLine: (v: Vars) =>
+      `${v.lang} → kinesisk · ${v.n} kandidat${Number(v.n) === 1 ? '' : 'er'}`,
+    chineseCandidatesLineSingle: (v: Vars) => `${v.lang} → kinesisk`,
+    usageNote: 'Hvornår bruges det',
+    pronunciation: 'Udtale: ',
+    example: 'Eksempel',
+    deleteRecord: 'Slet denne post',
+    refreshTooltip: 'Slå op igen (spring cache over)',
+    previewEntryHint: 'Klik for at se den fulde definition',
+    viewAllHint: 'Klik for at se alle opslag i denne gruppe',
+
+    registerCasual: 'uformel',
+    registerColloquial: 'dagligdags',
+    registerNeutral: 'neutral',
+    registerFormal: 'formel',
+    registerLiterary: 'litterær',
+    dirBadgeZhToOther: 'ZH→',
+    dirBadgeOtherToZh: '→ZH',
+
+    tabAll: 'Alle',
+    tabByDate: 'Efter dato',
+    tabByClass: 'Efter lektion',
+
+    emptyAll: 'Ingen opslag endnu. Gå til "Opslag" og indtast et kinesisk ord for at starte.',
+    emptyByDate: 'Ingen automatisk arkiverede opslag i dag endnu.',
+    emptyByClass: 'Ingen manuelle lektioner endnu. Klik på "Ny lektion" i toplinjen for at oprette en.',
+
+    autoArchive: 'Auto',
+    manualClass: 'Manuel',
+    ended: 'Afsluttet',
+    startedAt: (v: Vars) => `Startet ${v.time}`,
+    endedAt: (v: Vars) => ` · afsluttet ${v.time}`,
+    deleteSessionConfirm: (v: Vars) =>
+      `Slet gruppen "${v.name}"? Opslagene slettes ikke.`,
+    delete: 'Slet',
+    moreN: (v: Vars) => `+${v.n} flere`,
+
+    allEntriesSub: (v: Vars) =>
+      `${v.lang} · ${v.time} · ${v.n} betydning${Number(v.n) === 1 ? '' : 'er'}`,
+
+    exportPptTitle: 'Eksportér som PPT',
+    exportHint:
+      'Vælg en eller flere grupper under "Efter dato" eller "Efter lektion" til venstre, og klik derefter nedenfor.',
+    selectedSessions: (v: Vars) =>
+      `${v.n} gruppe${Number(v.n) === 1 ? '' : 'r'} valgt`,
+    dedupedEntries: (v: Vars) =>
+      `${v.n} ${Number(v.n) === 1 ? 'unikt opslag' : 'unikke opslag'} i alt`,
+    includePinyin: 'Pinyin på eksempler',
+    includeExampleTranslation: 'Oversæt eksempler',
+    pptTitleLabel: 'PPT-titel (valgfri)',
+    pptTitlePlaceholder: 'Lad stå tom for at bruge lektionsnavnet',
+    exportBtn: 'Eksportér .pptx',
+    exporting: 'Genererer…',
+    clearSelection: 'Ryd valg',
+    exportFailed: (v: Vars) => `Eksport mislykkedes: ${v.msg}`,
+
+    nothingToExport: 'Ingen opslag at eksportere',
+    pptFooterBrand: 'note.neooccidental.com · Dictionary & Note',
+    pptEntriesCount: (v: Vars) => `${v.n} opslag`,
+    pptGroupCount: (v: Vars) =>
+      `${v.n} lektion${Number(v.n) === 1 ? '' : 'er'} / dato${Number(v.n) === 1 ? '' : 'er'}`,
+
+    loginTab: 'Log ind',
+    signupTab: 'Opret konto',
+    emailLabel: 'E-mail',
+    passwordLabel: 'Adgangskode',
+    displayNameLabel: 'Visningsnavn',
+    roleLabel: 'Jeg er',
+    roleStudent: 'Elev',
+    roleStudentHint: 'Følg mine egne opslag',
+    roleTeacher: 'Lærer',
+    roleTeacherHint: 'Administrér mapper for mine elever',
+    signInBtn: 'Log ind',
+    signingIn: 'Logger ind…',
+    signUpBtn: 'Opret konto',
+    signingUp: 'Opretter konto…',
+    orDivider: 'eller',
+    signInWithGoogle: 'Log ind med Google',
+    signInWithGitHub: 'Log ind med GitHub',
+    confirmEmailHeading: 'Tjek din indbakke',
+    confirmEmailBody: (v: Vars) =>
+      `Vi har sendt et bekræftelseslink til ${v.email}. Klik på det for at fuldføre oprettelsen.`,
+    confirmEmailHint:
+      'Har du ikke modtaget den? Tjek din spammappe, eller brug "Send bekræftelses-e-mail igen" nedenfor.',
+    confirmEmailAlreadyHeading: 'Denne e-mail er allerede registreret',
+    confirmEmailAlreadyBody: (v: Vars) =>
+      `${v.email} blev registreret tidligere, men aldrig bekræftet. Supabase sender ikke automatisk en ny e-mail — tryk nedenfor for at sende igen, eller log ind, hvis du allerede har bekræftet.`,
+    confirmEmailResend: 'Send bekræftelses-e-mail igen',
+    confirmEmailResending: 'Sender…',
+    confirmEmailResent: 'E-mailen er sendt igen — tjek venligst din indbakke.',
+    confirmEmailResendFailed: (v: Vars) => `Gensendelse mislykkedes: ${v.msg}`,
+    confirmEmailGoLogin: 'Gå til log ind',
+
+    pwRuleLen: 'Mindst 8 tegn',
+    pwRuleLower: 'Et lille bogstav',
+    pwRuleUpper: 'Et stort bogstav',
+    pwRuleDigit: 'Et tal',
+    pwRuleSpecial: 'Et specialtegn',
+
+    authConfigMissingTitle: 'Login er ikke konfigureret',
+    authConfigMissingBody:
+      'Angiv Supabase-URL + publishable key i .env.local og genindlæs.',
+    reloadPage: 'Genindlæs siden og prøv igen',
+
+    signOutBtn: 'Log ud',
+    roleBadgeStudent: 'Elev',
+    roleBadgeTeacher: 'Lærer',
+    helloUser: (v: Vars) => `Hej, ${v.name}`,
+
+    contextLabel: 'Kontekst',
+    contextSelf: 'Mig selv',
+    contextStudent: (v: Vars) => `Elev: ${v.name}`,
+    manageStudentsBtn: 'Administrér elevmapper',
+    studentManagerTitle: 'Elevmapper',
+    studentManagerHint:
+      'Hver elev får sin egen private opslagsmappe. Opslag, du laver, mens en elev er valgt, tilhører kun den elev — praktisk til eksport og gennemgang pr. elev.',
+    studentEmpty: 'Ingen elevmapper endnu.',
+    studentSortLabel: 'Sortér:',
+    studentSortByName: 'Navn',
+    studentSortByCreated: 'Dato tilføjet',
+    studentSortByActivity: 'Seneste aktivitet',
+    studentSortDirAscTooltip: 'Stigende — klik for faldende',
+    studentSortDirDescTooltip: 'Faldende — klik for stigende',
+    addStudentLabel: 'Tilføj elev',
+    addStudentPlaceholder: 'Elevens navn',
+    addStudentBtn: 'Tilføj',
+    studentRowEdit: 'Omdøb',
+    studentRowDelete: 'Slet',
+    studentRowSave: 'Gem',
+    studentRowCancel: 'Annuller',
+    studentDeleteConfirm: (v: Vars) =>
+      `Slet eleven "${v.name}"? Alle opslag og lektioner, der tilhører denne elev, slettes også.`,
+    closeBtn: 'Luk',
+
+    importLegacyTitle: 'Importér data fra denne enhed?',
+    importLegacyBody: (v: Vars) =>
+      `Vi fandt ${v.entries} opslag og ${v.sessions} lektioner gemt lokalt på denne enhed (fra før du oprettede en konto). Importér dem til din skykonto, så de er tilgængelige på andre enheder?`,
+    importLegacyConfirm: 'Importér til skyen',
+    importLegacySkip: 'Spring over',
+    importLegacyImporting: 'Importerer…',
+    importLegacyDone: (v: Vars) =>
+      `Importerede ${v.entries} opslag / ${v.sessions} lektion${Number(v.sessions) === 1 ? '' : 'er'}.`,
+    importLegacyFailed: (v: Vars) => `Import mislykkedes: ${v.msg}`,
+
+    signupPromptTitle: 'Opret en konto og byg din sprogindlærings-notesbog',
+    signupPromptBody:
+      'Du kan slå ord op på ethvert sprog lige nu — uden login. Opret en konto og få adgang til:',
+    signupPromptBullet1: 'Opslag gemt i skyen, tilgængelige på alle enheder',
+    signupPromptBullet2: 'Automatisk arkivering efter dato/lektion, gennemgå og eksportér til PPT når som helst',
+    signupPromptBullet3: 'Kommer snart: automatisk genererede quizzer & spaced repetition',
+    signupPromptBullet4: 'Opret dig som lærer og administrér separate mapper for hver elev',
+    signupPromptCtaSignup: 'Opret konto — gratis',
+    signupPromptCtaLogin: 'Har du allerede en konto? Log ind',
+    signupPromptDismiss: 'Luk',
+
+    historyAnonTitle: 'Historik kræver en konto',
+    historyAnonBody:
+      'Anonyme opslag gemmes ikke i skyen. Opret en konto, og alle opslag arkiveres automatisk efter dato og lektion, klar til gennemgang eller PPT-eksport.',
   },
 } as const satisfies Record<UILang, Record<string, string | ((v: Vars) => string)>>;
 
