@@ -7,8 +7,8 @@
  * }
  * Response: TranslateResponse (JSON) — see src/types/dictionary.ts
  *
- * Runs on Vercel Edge Runtime.  Gemini is called with fetch directly;
- * Claude through the official @anthropic-ai/sdk.
+ * Runs on Vercel Edge Runtime — no npm deps, both providers are called
+ * with fetch directly (see callClaude for why not the Anthropic SDK).
  * AI_PROVIDER ("gemini" | "claude", default "gemini") picks the primary
  * provider; the other one is the automatic backup when its key
  * (GEMINI_API_KEY / ANTHROPIC_API_KEY) is set.
@@ -17,8 +17,6 @@
  *
  * Error responses: { error, errorCode, detail } — see summarizeAiFailures.
  */
-
-import Anthropic from '@anthropic-ai/sdk';
 
 export const config = { runtime: 'edge' };
 
@@ -426,24 +424,31 @@ export function classifyGeminiHttpError(status: number, body: string): AiErrorKi
   return 'other';
 }
 
-export function classifyClaudeError(err: unknown): AiErrorKind {
-  // Connection / timeout / abort errors are APIError subclasses with
-  // status undefined, so they must be checked before the status checks.
-  if (err instanceof Anthropic.APIConnectionError) return 'transient';
-  if (err instanceof Anthropic.APIUserAbortError) return 'transient';
-  if (err instanceof Anthropic.APIError) {
-    if (err.status === 402 || err.type === 'billing_error') return 'billing';
-    if (
-      err instanceof Anthropic.AuthenticationError ||
-      err instanceof Anthropic.PermissionDeniedError
-    ) {
-      return 'auth';
-    }
-    if (err instanceof Anthropic.RateLimitError) return 'rate_limit';
-    if (err instanceof Anthropic.InternalServerError) return 'transient';
-    return 'other';
+/**
+ * Classify a non-2xx Claude API response by HTTP status and the
+ * `error.type` field of the body (billing_error is HTTP 402,
+ * overloaded_error is HTTP 529).
+ */
+export function classifyClaudeHttpError(status: number, errorType: string | undefined): AiErrorKind {
+  if (status === 402 || errorType === 'billing_error') return 'billing';
+  if (
+    status === 401 ||
+    status === 403 ||
+    errorType === 'authentication_error' ||
+    errorType === 'permission_error'
+  ) {
+    return 'auth';
   }
-  return 'bad_output';
+  if (status === 429 || errorType === 'rate_limit_error') return 'rate_limit';
+  if (
+    status >= 500 ||
+    errorType === 'overloaded_error' ||
+    errorType === 'api_error' ||
+    errorType === 'timeout_error'
+  ) {
+    return 'transient';
+  }
+  return 'other';
 }
 
 /**
@@ -759,41 +764,78 @@ export function toClaudeJsonSchema(schema: unknown): Record<string, unknown> {
   return out;
 }
 
+/**
+ * Claude Messages API over plain fetch.  The official SDK can't be
+ * used here: Vercel traces Edge Function dependencies with
+ * @vercel/nft, which ignores the SDK's object-form "browser" field, so
+ * the SDK's Node-only module (node:fs, node:child_process, …) ends up
+ * in the Edge bundle and the deploy is rejected.
+ */
 async function callClaude(
   prompt: string,
   schema: object,
   apiKey: string,
   timeoutMs: number,
 ): Promise<ApiResponse> {
-  // Retries are driven by runSteps so they respect the request deadline.
-  const client = new Anthropic({ apiKey, maxRetries: 0, timeout: timeoutMs });
-
-  let message: Anthropic.Message;
+  let res: Response;
   try {
-    message = await client.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: 8192,
-      // Structured outputs guarantee the text block is valid JSON for the
-      // schema.  Low effort keeps latency down for a lookup task.
-      output_config: {
-        effort: 'low',
-        format: { type: 'json_schema', schema: toClaudeJsonSchema(schema) },
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2026-10-21',
       },
-      messages: [{ role: 'user', content: prompt }],
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 8192,
+        // Structured outputs guarantee the text block is valid JSON for
+        // the schema.  Low effort keeps latency down for a lookup task.
+        output_config: {
+          effort: 'low',
+          format: { type: 'json_schema', schema: toClaudeJsonSchema(schema) },
+        },
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
+    const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
     throw new AiProviderError(
       'claude',
-      classifyClaudeError(err),
-      `Claude API: ${err instanceof Error ? err.message : String(err)}`.slice(0, 400),
-      err instanceof Anthropic.APIError ? err.status : undefined,
+      'transient',
+      timedOut
+        ? `Claude 超时（${Math.round(timeoutMs / 1000)}s）`
+        : `Claude 网络错误：${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
+  if (!res.ok) {
+    const raw = await res.text().catch(() => '');
+    let errorType: string | undefined;
+    try {
+      errorType = (JSON.parse(raw) as { error?: { type?: string } })?.error?.type;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new AiProviderError(
+      'claude',
+      classifyClaudeHttpError(res.status, errorType),
+      `Claude API ${res.status}: ${raw.slice(0, 300)}`,
+      res.status,
+    );
+  }
+
+  let message: { stop_reason?: string; content?: Array<{ type: string; text?: string }> };
+  try {
+    message = (await res.json()) as typeof message;
+  } catch (err) {
+    throw new AiProviderError('claude', 'transient', `Claude 响应读取失败：${String(err)}`);
+  }
   if (message.stop_reason === 'refusal' || message.stop_reason === 'max_tokens') {
     throw new AiProviderError('claude', 'bad_output', `Claude 输出未完成（stop_reason=${message.stop_reason}）`);
   }
-  const text = message.content.find((b) => b.type === 'text')?.text ?? '';
+  const text = message.content?.find((b) => b.type === 'text')?.text ?? '';
   try {
     return JSON.parse(text) as ApiResponse;
   } catch {

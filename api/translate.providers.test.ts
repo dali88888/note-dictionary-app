@@ -18,6 +18,7 @@ import handler, {
   AI_TIMING,
   AiProviderError,
   __resetAiStateForTests,
+  classifyClaudeHttpError,
   classifyGeminiHttpError,
   summarizeAiFailures,
   toClaudeJsonSchema,
@@ -162,6 +163,18 @@ describe('classifyGeminiHttpError', () => {
 
   it('treats other 4xx as other', () => {
     expect(classifyGeminiHttpError(400, '{"error":{"message":"Invalid JSON payload"}}')).toBe('other');
+  });
+});
+
+describe('classifyClaudeHttpError', () => {
+  it('maps documented Claude API errors', () => {
+    expect(classifyClaudeHttpError(402, 'billing_error')).toBe('billing');
+    expect(classifyClaudeHttpError(401, 'authentication_error')).toBe('auth');
+    expect(classifyClaudeHttpError(403, 'permission_error')).toBe('auth');
+    expect(classifyClaudeHttpError(429, 'rate_limit_error')).toBe('rate_limit');
+    expect(classifyClaudeHttpError(529, 'overloaded_error')).toBe('transient');
+    expect(classifyClaudeHttpError(500, 'api_error')).toBe('transient');
+    expect(classifyClaudeHttpError(400, 'invalid_request_error')).toBe('other');
   });
 });
 
