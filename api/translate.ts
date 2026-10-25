@@ -7,9 +7,18 @@
  * }
  * Response: TranslateResponse (JSON) — see src/types/dictionary.ts
  *
- * Runs on Vercel Edge Runtime — zero npm deps, uses fetch directly.
- * Reads AI_PROVIDER env ("gemini" | "claude"). Defaults to "gemini".
+ * Runs on Vercel Edge Runtime.  Gemini is called with fetch directly;
+ * Claude through the official @anthropic-ai/sdk.
+ * AI_PROVIDER ("gemini" | "claude", default "gemini") picks the primary
+ * provider; the other one is the automatic backup when its key
+ * (GEMINI_API_KEY / ANTHROPIC_API_KEY) is set.
+ *
+ * GET /api/translate?health=1 — live check of each configured provider.
+ *
+ * Error responses: { error, errorCode, detail } — see summarizeAiFailures.
  */
+
+import Anthropic from '@anthropic-ai/sdk';
 
 export const config = { runtime: 'edge' };
 
@@ -318,76 +327,335 @@ const REVERSE_SCHEMA = {
  * ─────────────────────────────────────────────────────────────── */
 
 /**
- * Two-tier strategy for transient Gemini failures.
+ * Provider chain: the primary provider (AI_PROVIDER, default gemini)
+ * runs first; the other provider, when its API key is configured, is
+ * the automatic backup.  So with both GEMINI_API_KEY and
+ * ANTHROPIC_API_KEY set, a Gemini outage or an empty Gemini balance is
+ * invisible to users — Claude answers instead.
  *
- * Tier 1: callGeminiWithRetry on the PRIMARY model (gemini-2.5-flash).
- *   The free tier surfaces 503 UNAVAILABLE / 429 RESOURCE_EXHAUSTED
- *   during peak hours — these are usually short capacity blips on
- *   Google's side, so 2 retries with 1.5s + 3.5s backoff usually
- *   succeeds without the user ever seeing an error.
+ * Every upstream failure is classified (see AiErrorKind) because the
+ * right reaction differs:
+ *   • billing / auth — permanent until a human fixes the account.  No
+ *     retries (retrying a 402 just burns the time budget — that's how
+ *     the "Gemini 高峰期 … 请过 30 秒后再查询" message used to appear
+ *     when the real cause was an empty prepaid balance).  The provider
+ *     is also put on a short cooldown so later requests in the same
+ *     isolate go to the backup first.
+ *   • rate_limit / transient — worth a retry within the time budget,
+ *     then the backup provider.
+ *   • bad_output / other — no retry on the same provider; try the
+ *     backup.
  *
- * Tier 2: if the primary still fails after retries, try the FALLBACK
- *   model (gemini-2.5-flash-lite) once.  Lite is a separate model on
- *   different infra with its own load profile — when 2.5-flash is
- *   under pressure, lite usually isn't, and vice versa.  Quality
- *   for dictionary lookups is comparable.
- *
- * Permanent errors (400 bad input, 401/403 auth) bypass retries and
- * the fallback entirely — we throw immediately so the real cause
- * surfaces fast.
+ * Gemini keeps its two tiers for transient failures: retries on
+ * gemini-2.5-flash, then one shot on gemini-2.5-flash-lite (separate
+ * capacity pool, comparable quality for dictionary lookups).
  */
 const GEMINI_PRIMARY_MODEL = 'gemini-2.5-flash';
 const GEMINI_FALLBACK_MODEL = 'gemini-2.5-flash-lite';
-const GEMINI_RETRY_DELAYS_MS = [1500, 3500]; // attempts after the first, on PRIMARY only
+const CLAUDE_MODEL = 'claude-haiku-5-5';
 
-function isTransientGeminiError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return (
-    /\b(503|429|500|502|504)\b/.test(msg) ||
-    /UNAVAILABLE|OVERLOADED|RESOURCE_EXHAUSTED|deadline/i.test(msg)
+type AiProvider = 'gemini' | 'claude';
+type AiErrorKind =
+  | 'billing'
+  | 'auth'
+  | 'rate_limit'
+  | 'transient'
+  | 'bad_output'
+  | 'other';
+
+/**
+ * Time budget.  The client aborts at 35 s, so the whole chain must
+ * finish well before that.  When a backup provider exists, the primary
+ * only gets `primaryShareMs` so the backup still has room to answer.
+ * Mutable (not `as const`) so tests can shrink the delays.
+ */
+export const AI_TIMING = {
+  overallBudgetMs: 26_000,
+  primaryShareMs: 12_000,
+  minAttemptMs: 3_000,
+  geminiRetryDelaysMs: [1500, 3500],
+  claudeRetryDelaysMs: [1000],
+  cooldownMs: 5 * 60_000,
+};
+
+const PROVIDER_LABEL: Record<AiProvider, string> = {
+  gemini: 'Gemini',
+  claude: 'Claude',
+};
+
+export class AiProviderError extends Error {
+  constructor(
+    public provider: AiProvider,
+    public kind: AiErrorKind,
+    message: string,
+    public status?: number,
+  ) {
+    super(message);
+    this.name = 'AiProviderError';
+  }
+}
+
+function isRetryable(kind: AiErrorKind): boolean {
+  return kind === 'transient' || kind === 'rate_limit';
+}
+
+/**
+ * Classify a non-2xx Gemini response.  Gemini reports an empty prepaid
+ * balance as HTTP 402 with status "RESOURCE_EXHAUSTED" — the same
+ * status string it uses for rate limits — so the HTTP code and the
+ * message must be checked before the status string.
+ */
+export function classifyGeminiHttpError(status: number, body: string): AiErrorKind {
+  if (
+    status === 402 ||
+    /prepayment credits|credits are depleted|BILLING_DISABLED|requires billing/i.test(body)
+  ) {
+    return 'billing';
+  }
+  if (
+    status === 401 ||
+    status === 403 ||
+    /API_KEY_INVALID|API key not valid|API key expired/i.test(body)
+  ) {
+    return 'auth';
+  }
+  if (status === 429) return 'rate_limit';
+  if (status >= 500 || /UNAVAILABLE|OVERLOADED|DEADLINE_EXCEEDED/.test(body)) {
+    return 'transient';
+  }
+  return 'other';
+}
+
+export function classifyClaudeError(err: unknown): AiErrorKind {
+  // Connection / timeout / abort errors are APIError subclasses with
+  // status undefined, so they must be checked before the status checks.
+  if (err instanceof Anthropic.APIConnectionError) return 'transient';
+  if (err instanceof Anthropic.APIUserAbortError) return 'transient';
+  if (err instanceof Anthropic.APIError) {
+    if (err.status === 402 || err.type === 'billing_error') return 'billing';
+    if (
+      err instanceof Anthropic.AuthenticationError ||
+      err instanceof Anthropic.PermissionDeniedError
+    ) {
+      return 'auth';
+    }
+    if (err instanceof Anthropic.RateLimitError) return 'rate_limit';
+    if (err instanceof Anthropic.InternalServerError) return 'transient';
+    return 'other';
+  }
+  return 'bad_output';
+}
+
+/**
+ * Billing / auth failures don't fix themselves, so for a few minutes
+ * the failing provider is moved to the back of the chain.  Module
+ * state lives per Edge isolate — best effort, which is all it needs
+ * to be: it only saves latency, never changes the answer.
+ */
+const providerCooldownUntil: Partial<Record<AiProvider, number>> = {};
+
+export function __resetAiStateForTests(): void {
+  for (const k of Object.keys(providerCooldownUntil) as AiProvider[]) {
+    delete providerCooldownUntil[k];
+  }
+}
+
+function configuredProviders(): AiProvider[] {
+  const primary: AiProvider =
+    (process.env.AI_PROVIDER || 'gemini').toLowerCase() === 'claude' ? 'claude' : 'gemini';
+  const order: AiProvider[] = primary === 'claude' ? ['claude', 'gemini'] : ['gemini', 'claude'];
+  return order.filter((p) => !!providerKey(p));
+}
+
+function providerKey(p: AiProvider): string | undefined {
+  return p === 'claude' ? process.env.ANTHROPIC_API_KEY : process.env.GEMINI_API_KEY;
+}
+
+function orderByCooldown(providers: AiProvider[]): AiProvider[] {
+  const now = Date.now();
+  const cooling = (p: AiProvider) => (providerCooldownUntil[p] ?? 0) > now;
+  return [...providers.filter((p) => !cooling(p)), ...providers.filter(cooling)];
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Run `steps` in order until one succeeds.  A non-retryable failure
+ * ends the run immediately; a retryable one moves on to the next step
+ * if the deadline still leaves room for it.
+ */
+async function runSteps(
+  provider: AiProvider,
+  steps: Array<{ delayMs: number; label: string; call: (timeoutMs: number) => Promise<ApiResponse> }>,
+  deadline: number,
+): Promise<ApiResponse> {
+  let lastErr: AiProviderError | undefined;
+  for (const [i, step] of steps.entries()) {
+    if (i > 0) {
+      if (deadline - Date.now() < step.delayMs + AI_TIMING.minAttemptMs) break;
+      if (step.delayMs > 0) await sleep(step.delayMs);
+    }
+    const timeoutMs = Math.max(deadline - Date.now(), 1000);
+    try {
+      return await step.call(timeoutMs);
+    } catch (err) {
+      lastErr =
+        err instanceof AiProviderError
+          ? err
+          : new AiProviderError(provider, 'other', err instanceof Error ? err.message : String(err));
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ai] ${step.label} failed (${lastErr.kind}${lastErr.status ? `, HTTP ${lastErr.status}` : ''}): ${lastErr.message.slice(0, 300)}`,
+      );
+      if (!isRetryable(lastErr.kind)) throw lastErr;
+    }
+  }
+  throw lastErr ?? new AiProviderError(provider, 'transient', `${PROVIDER_LABEL[provider]} 未在时限内完成`);
+}
+
+function runGemini(prompt: string, schema: object, apiKey: string, deadline: number) {
+  return runSteps(
+    'gemini',
+    [
+      {
+        delayMs: 0,
+        label: `gemini ${GEMINI_PRIMARY_MODEL} attempt 1`,
+        call: (t) => callGemini(GEMINI_PRIMARY_MODEL, prompt, schema, apiKey, t),
+      },
+      ...AI_TIMING.geminiRetryDelaysMs.map((delayMs, i) => ({
+        delayMs,
+        label: `gemini ${GEMINI_PRIMARY_MODEL} attempt ${i + 2}`,
+        call: (t: number) => callGemini(GEMINI_PRIMARY_MODEL, prompt, schema, apiKey, t),
+      })),
+      {
+        delayMs: 0,
+        label: `gemini ${GEMINI_FALLBACK_MODEL}`,
+        call: (t) => callGemini(GEMINI_FALLBACK_MODEL, prompt, schema, apiKey, t),
+      },
+    ],
+    deadline,
   );
 }
 
-async function callGeminiWithRetryAndFallback(
-  prompt: string,
-  schema: object,
-  apiKey: string,
-): Promise<ApiResponse> {
-  let lastErr: unknown;
-  // Tier 1: primary model with retries.
-  for (let attempt = 0; attempt <= GEMINI_RETRY_DELAYS_MS.length; attempt++) {
-    if (attempt > 0) {
-      const delay = GEMINI_RETRY_DELAYS_MS[attempt - 1] ?? 0;
-      await new Promise((r) => setTimeout(r, delay));
+function runClaude(prompt: string, schema: object, apiKey: string, deadline: number) {
+  return runSteps(
+    'claude',
+    [0, ...AI_TIMING.claudeRetryDelaysMs].map((delayMs, i) => ({
+      delayMs,
+      label: `claude ${CLAUDE_MODEL} attempt ${i + 1}`,
+      call: (t: number) => callClaude(prompt, schema, apiKey, t),
+    })),
+    deadline,
+  );
+}
+
+type ChainResult =
+  | { ok: true; result: ApiResponse; provider: AiProvider; failures: AiProviderError[] }
+  | { ok: false; failures: AiProviderError[]; configured: AiProvider[] };
+
+async function translateWithProviders(prompt: string, schema: object): Promise<ChainResult> {
+  const configured = configuredProviders();
+  const chain = orderByCooldown(configured);
+  const overallDeadline = Date.now() + AI_TIMING.overallBudgetMs;
+  const failures: AiProviderError[] = [];
+
+  for (const [i, provider] of chain.entries()) {
+    const isLast = i === chain.length - 1;
+    const deadline = isLast
+      ? overallDeadline
+      : Math.min(overallDeadline, Date.now() + AI_TIMING.primaryShareMs);
+    if (deadline - Date.now() < AI_TIMING.minAttemptMs) {
+      failures.push(new AiProviderError(provider, 'transient', `没有足够的剩余时间调用 ${PROVIDER_LABEL[provider]}`));
+      continue;
     }
+    const key = providerKey(provider) as string;
     try {
-      return await callGemini(GEMINI_PRIMARY_MODEL, prompt, schema, apiKey);
-    } catch (err) {
-      lastErr = err;
-      if (!isTransientGeminiError(err)) {
-        // Permanent — bail out, no fallback.
-        throw err;
+      const result =
+        provider === 'claude'
+          ? await runClaude(prompt, schema, key, deadline)
+          : await runGemini(prompt, schema, key, deadline);
+      delete providerCooldownUntil[provider];
+      if (failures.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ai] served by backup ${provider} after: ${failures.map((f) => `${f.provider}=${f.kind}`).join(', ')}`,
+        );
       }
-      const msg = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[gemini] primary attempt ${attempt + 1}/${GEMINI_RETRY_DELAYS_MS.length + 1} failed (transient): ${msg.slice(0, 200)}`,
-      );
+      return { ok: true, result, provider, failures };
+    } catch (err) {
+      const e =
+        err instanceof AiProviderError
+          ? err
+          : new AiProviderError(provider, 'other', err instanceof Error ? err.message : String(err));
+      failures.push(e);
+      if (e.kind === 'billing' || e.kind === 'auth') {
+        providerCooldownUntil[provider] = Date.now() + AI_TIMING.cooldownMs;
+      }
     }
   }
-  // Tier 2: fallback model, single shot.
-  try {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[gemini] primary ${GEMINI_PRIMARY_MODEL} exhausted; falling back to ${GEMINI_FALLBACK_MODEL}`,
-    );
-    return await callGemini(GEMINI_FALLBACK_MODEL, prompt, schema, apiKey);
-  } catch (err) {
-    // If the fallback also failed, throw the worst error we saw.  Prefer
-    // the fallback's error since it's the most recent, but if the fallback
-    // failed the same way, the primary's error is just as useful.
-    throw err instanceof Error ? err : new Error(String(err));
+  return { ok: false, failures, configured };
+}
+
+const KIND_ZH: Record<AiErrorKind, string> = {
+  billing: '预付费额度已用完',
+  auth: 'API 密钥无效或已过期',
+  rate_limit: '请求过于频繁或配额已达上限',
+  transient: '服务繁忙或超时',
+  bad_output: '返回内容格式错误',
+  other: '调用失败',
+};
+const KIND_EN: Record<AiErrorKind, string> = {
+  billing: 'out of credits',
+  auth: 'invalid API key',
+  rate_limit: 'rate limited',
+  transient: 'busy or timed out',
+  bad_output: 'malformed response',
+  other: 'request failed',
+};
+
+export type AiErrorCode = 'AI_BUSY' | 'AI_BILLING' | 'AI_AUTH' | 'AI_FAILED';
+
+const CODE_HEADLINE_ZH: Record<AiErrorCode, string> = {
+  AI_BILLING:
+    'AI 翻译服务的额度已用完，暂时无法查询新的词（之前查过的词仍可正常使用）。请联系网站管理员充值。',
+  AI_AUTH: 'AI 翻译服务配置有误（API 密钥无效或已过期），暂时无法查询。请联系网站管理员检查配置。',
+  AI_BUSY: 'AI 翻译服务暂时繁忙，请稍后再试。',
+  AI_FAILED: 'AI 翻译失败，请重试或换一种说法。',
+};
+
+/**
+ * Turn the chain's failures into one user-facing error.  The headline
+ * follows the most actionable cause: if any provider was merely busy,
+ * retrying can work, so say "busy"; otherwise billing beats auth beats
+ * everything else.  The per-provider detail is always included, so an
+ * empty balance stays visible even when the headline is "busy".
+ */
+export function summarizeAiFailures(
+  failures: AiProviderError[],
+  configured: AiProvider[],
+): { code: AiErrorCode; message: string; detail: string } {
+  const kinds = new Set(failures.map((f) => f.kind));
+  const code: AiErrorCode =
+    kinds.has('transient') || kinds.has('rate_limit')
+      ? 'AI_BUSY'
+      : kinds.has('billing')
+        ? 'AI_BILLING'
+        : kinds.has('auth')
+          ? 'AI_AUTH'
+          : 'AI_FAILED';
+
+  const http = (f: AiProviderError) => (f.status ? ` (HTTP ${f.status})` : '');
+  const zhParts = failures.map((f) => `${PROVIDER_LABEL[f.provider]}：${KIND_ZH[f.kind]}${http(f)}`);
+  const enParts = failures.map((f) => `${PROVIDER_LABEL[f.provider]}: ${KIND_EN[f.kind]}${http(f)}`);
+  if (configured.length === 1) {
+    zhParts.push('未配置备用 AI');
+    enParts.push('no backup AI configured');
   }
+  return {
+    code,
+    message: `${CODE_HEADLINE_ZH[code]}（${zhParts.join('；')}）`,
+    detail: enParts.join(' · '),
+  };
 }
 
 async function callGemini(
@@ -395,6 +663,7 @@ async function callGemini(
   prompt: string,
   schema: object,
   apiKey: string,
+  timeoutMs: number,
 ): Promise<ApiResponse> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
@@ -415,65 +684,168 @@ async function callGemini(
     },
   };
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Gemini API ${res.status}: ${text.slice(0, 300)}`);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    throw new AiProviderError(
+      'gemini',
+      'transient',
+      timedOut
+        ? `Gemini ${model} 超时（${Math.round(timeoutMs / 1000)}s）`
+        : `Gemini 网络错误：${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
-  const data = await res.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new AiProviderError(
+      'gemini',
+      classifyGeminiHttpError(res.status, text),
+      `Gemini API ${res.status}: ${text.slice(0, 300)}`,
+      res.status,
+    );
+  }
+
+  let text: string | undefined;
+  try {
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  } catch (err) {
+    // The body stream can also be cut off by the timeout signal.
+    throw new AiProviderError('gemini', 'transient', `Gemini 响应读取失败：${String(err)}`);
+  }
+  if (!text) throw new AiProviderError('gemini', 'bad_output', 'Gemini 返回了空内容');
+  try {
+    return JSON.parse(text) as ApiResponse;
+  } catch {
+    throw new AiProviderError('gemini', 'bad_output', `Gemini 返回的不是合法 JSON：${text.slice(0, 120)}`);
+  }
+}
+
+/**
+ * Convert one of the Gemini-dialect schemas above (upper-case `type`)
+ * to the JSON Schema that Claude's structured outputs expect, which
+ * also requires `additionalProperties: false` on every object.
+ * Exported for unit testing.
+ */
+export function toClaudeJsonSchema(schema: unknown): Record<string, unknown> {
+  const s = schema as {
+    type?: string;
+    properties?: Record<string, unknown>;
+    items?: unknown;
+    required?: readonly string[];
+    enum?: readonly string[];
   };
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Gemini 返回了空内容');
-  return JSON.parse(text) as ApiResponse;
+  const out: Record<string, unknown> = {};
+  if (s.type) out.type = s.type.toLowerCase();
+  if (s.enum) out.enum = [...s.enum];
+  if (s.properties) {
+    out.properties = Object.fromEntries(
+      Object.entries(s.properties).map(([k, v]) => [k, toClaudeJsonSchema(v)]),
+    );
+  }
+  if (s.required) out.required = [...s.required];
+  if (s.items) out.items = toClaudeJsonSchema(s.items);
+  if (out.type === 'object') out.additionalProperties = false;
+  return out;
 }
 
 async function callClaude(
   prompt: string,
+  schema: object,
   apiKey: string,
+  timeoutMs: number,
 ): Promise<ApiResponse> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2048,
-      messages: [
-        {
-          role: 'user',
-          content:
-            prompt +
-            '\n\nOutput must be a single JSON object — no prose, no code fences.',
-        },
-      ],
-    }),
-  });
+  // Retries are driven by runSteps so they respect the request deadline.
+  const client = new Anthropic({ apiKey, maxRetries: 0, timeout: timeoutMs });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Claude API ${res.status}: ${text.slice(0, 300)}`);
+  let message: Anthropic.Message;
+  try {
+    message = await client.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 8192,
+      // Structured outputs guarantee the text block is valid JSON for the
+      // schema.  Low effort keeps latency down for a lookup task.
+      output_config: {
+        effort: 'low',
+        format: { type: 'json_schema', schema: toClaudeJsonSchema(schema) },
+      },
+      messages: [{ role: 'user', content: prompt }],
+    });
+  } catch (err) {
+    throw new AiProviderError(
+      'claude',
+      classifyClaudeError(err),
+      `Claude API: ${err instanceof Error ? err.message : String(err)}`.slice(0, 400),
+      err instanceof Anthropic.APIError ? err.status : undefined,
+    );
   }
 
-  const data = await res.json() as {
-    content?: Array<{ type: string; text?: string }>;
+  if (message.stop_reason === 'refusal' || message.stop_reason === 'max_tokens') {
+    throw new AiProviderError('claude', 'bad_output', `Claude 输出未完成（stop_reason=${message.stop_reason}）`);
+  }
+  const text = message.content.find((b) => b.type === 'text')?.text ?? '';
+  try {
+    return JSON.parse(text) as ApiResponse;
+  } catch {
+    throw new AiProviderError('claude', 'bad_output', `Claude 返回的不是合法 JSON：${text.slice(0, 120)}`);
+  }
+}
+
+/**
+ * Live check of each configured provider, so the site owner can
+ * confirm a key works (and has credits) after changing it:
+ * GET /api/translate?health=1.  Each provider independently runs one
+ * real lookup ("好" → English) with the production prompt and schema,
+ * bypassing the cache.  Returns only status flags, never upstream
+ * messages.
+ */
+async function healthCheck(): Promise<Response> {
+  const check = async (provider: AiProvider) => {
+    const key = providerKey(provider);
+    if (!key) return { provider, configured: false };
+    const started = Date.now();
+    const prompt = FORWARD_PROMPT('好', 'English');
+    try {
+      const r =
+        provider === 'claude'
+          ? await callClaude(prompt, FORWARD_SCHEMA, key, 20_000)
+          : await callGemini(GEMINI_PRIMARY_MODEL, prompt, FORWARD_SCHEMA, key, 20_000);
+      return {
+        provider,
+        configured: true,
+        ok: Array.isArray(r.meanings) && r.meanings.length > 0,
+        meanings: Array.isArray(r.meanings) ? r.meanings.length : 0,
+        ms: Date.now() - started,
+      };
+    } catch (err) {
+      return {
+        provider,
+        configured: true,
+        ok: false,
+        kind: err instanceof AiProviderError ? err.kind : 'other',
+        status: err instanceof AiProviderError ? err.status : undefined,
+        ms: Date.now() - started,
+      };
+    }
   };
-  const text = data?.content?.find((b) => b.type === 'text')?.text ?? '';
-  // Strip code fences if Claude wrapped it
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-  return JSON.parse(cleaned) as ApiResponse;
+  const results = await Promise.all((['gemini', 'claude'] as const).map(check));
+  return new Response(
+    JSON.stringify({ chain: configuredProviders(), providers: results }),
+    {
+      status: 200,
+      headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+    },
+  );
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -1076,6 +1448,9 @@ async function storeCache(
  * ─────────────────────────────────────────────────────────────── */
 
 export default async function handler(req: Request): Promise<Response> {
+  if (req.method === 'GET' && new URL(req.url).searchParams.has('health')) {
+    return healthCheck();
+  }
   if (req.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405);
   }
@@ -1131,24 +1506,40 @@ export default async function handler(req: Request): Promise<Response> {
     }
   }
 
-  const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
   const prompt =
     direction === 'other-to-zh'
       ? REVERSE_PROMPT(word)
       : FORWARD_PROMPT(word, language);
   const schema = direction === 'other-to-zh' ? REVERSE_SCHEMA : FORWARD_SCHEMA;
 
+  if (configuredProviders().length === 0) {
+    return json(
+      {
+        error: '服务端未配置 GEMINI_API_KEY 或 ANTHROPIC_API_KEY',
+        errorCode: 'AI_AUTH',
+        detail: 'no AI provider configured',
+      },
+      500,
+    );
+  }
+
+  const outcome = await translateWithProviders(prompt, schema);
+  if (!outcome.ok) {
+    const summary = summarizeAiFailures(outcome.failures, outcome.configured);
+    // eslint-disable-next-line no-console
+    console.error(
+      `[ai] all providers failed (${summary.code}): ${outcome.failures
+        .map((f) => `${f.provider}=${f.kind}: ${f.message.slice(0, 200)}`)
+        .join(' | ')}`,
+    );
+    return json(
+      { error: summary.message, errorCode: summary.code, detail: summary.detail },
+      summary.code === 'AI_FAILED' ? 502 : 503,
+    );
+  }
+
   try {
-    let result: ApiResponse;
-    if (provider === 'claude') {
-      const key = process.env.ANTHROPIC_API_KEY;
-      if (!key) return json({ error: '服务端未配置 ANTHROPIC_API_KEY' }, 500);
-      result = await callClaude(prompt, key);
-    } else {
-      const key = process.env.GEMINI_API_KEY;
-      if (!key) return json({ error: '服务端未配置 GEMINI_API_KEY' }, 500);
-      result = await callGeminiWithRetryAndFallback(prompt, schema, key);
-    }
+    let result = outcome.result;
     // Echo back word in case AI normalized it
     result.word = result.word || word;
     if (direction === 'zh-to-other') {
@@ -1194,33 +1585,23 @@ export default async function handler(req: Request): Promise<Response> {
       console.warn('[cache] post-AI write rejected:', e);
     }
 
-    return json({ ...result, _fromCache: false } as ApiResponse, 200);
+    return json({ ...result, _fromCache: false } as ApiResponse, 200, {
+      'x-ai-provider': outcome.provider,
+    });
   } catch (err) {
+    // Only post-processing of a successful AI answer can land here
+    // (e.g. a payload missing the expected arrays).
     const msg = err instanceof Error ? err.message : String(err);
-    // Surface the most common transient Gemini failure (peak-hour
-    // capacity pressure) with a Chinese-friendly message — the raw
-    // upstream payload is English-only and unhelpful for end users.
-    // This branch only fires when the retry wrapper has already
-    // exhausted its attempts, so suggesting "稍后再试" is honest.
-    const isCapacityIssue =
-      /\b(503|429)\b/.test(msg) ||
-      /UNAVAILABLE|OVERLOADED|RESOURCE_EXHAUSTED|high demand/i.test(msg);
-    if (isCapacityIssue) {
-      return json(
-        {
-          error:
-            'AI 服务正繁忙（Gemini 高峰期），已自动重试主模型 + 备用模型仍未成功，请过 30 秒后再查询。如果长时间持续不可用，可在 Vercel 把 AI_PROVIDER 切换为 claude。',
-        },
-        503,
-      );
-    }
-    return json({ error: `AI 调用失败：${msg}` }, 500);
+    return json(
+      { error: `AI 返回结果处理失败：${msg}`, errorCode: 'AI_FAILED', detail: msg.slice(0, 120) },
+      500,
+    );
   }
 }
 
-function json(body: unknown, status: number): Response {
+function json(body: unknown, status: number, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
+    headers: { 'content-type': 'application/json; charset=utf-8', ...extraHeaders },
   });
 }

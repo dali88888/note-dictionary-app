@@ -2,7 +2,14 @@ import type { TranslateResponse, TranslationDirection } from '../types/dictionar
 import { supabase, withTimeout } from '../auth/supabaseClient';
 
 export class TranslateError extends Error {
-  constructor(message: string, public status?: number) {
+  constructor(
+    message: string,
+    public status?: number,
+    /** Server-side classification, e.g. "AI_BILLING" — see api/translate.ts summarizeAiFailures. */
+    public code?: string,
+    /** Short per-provider detail, e.g. "Gemini: out of credits (HTTP 402)". */
+    public detail?: string,
+  ) {
     super(message);
     this.name = 'TranslateError';
   }
@@ -98,14 +105,18 @@ export async function translateWord(
   clearTimeout(timeoutId);
 
   if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
+    let message = `HTTP ${res.status}`;
+    let code: string | undefined;
+    let detail: string | undefined;
     try {
       const body = await res.json();
-      if (body?.error) detail = body.error;
+      if (typeof body?.error === 'string') message = body.error;
+      if (typeof body?.errorCode === 'string') code = body.errorCode;
+      if (typeof body?.detail === 'string') detail = body.detail;
     } catch {
       /* body wasn't JSON */
     }
-    throw new TranslateError(detail, res.status);
+    throw new TranslateError(message, res.status, code, detail);
   }
 
   const data = (await res.json()) as TranslateResponse;

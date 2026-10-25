@@ -81,6 +81,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Detected: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Query failed: ${v.msg}`,
+    aiErrorBilling:
+      "The AI translation service has run out of credits, so new lookups are unavailable for now (words you've looked up before still work). Please contact the site administrator.",
+    aiErrorAuth:
+      'The AI translation service is misconfigured (invalid or expired API key). Please contact the site administrator.',
+    aiErrorBusy: 'The AI translation service is temporarily busy. Please try again in a moment.',
+    aiErrorFailed: 'AI translation failed. Please try again or rephrase your input.',
     pendingPersistsCount: (v: Vars) =>
       Number(v.n) === 1
         ? '1 query waiting to sync'
@@ -300,6 +306,11 @@ const DICT = {
     detectedLanguage: (v: Vars) => `检测语言：${v.lang}`,
 
     queryFailed: (v: Vars) => `查询失败：${v.msg}`,
+    aiErrorBilling:
+      'AI 翻译服务的额度已用完，暂时无法查询新的词（之前查过的词仍可正常使用）。请联系网站管理员充值。',
+    aiErrorAuth: 'AI 翻译服务配置有误（API 密钥无效或已过期），暂时无法查询。请联系网站管理员。',
+    aiErrorBusy: 'AI 翻译服务暂时繁忙，请稍后再试。',
+    aiErrorFailed: 'AI 翻译失败，请重试或换一种说法。',
     pendingPersistsCount: (v: Vars) => `${v.n} 条查询尚未同步到云端`,
     pendingPersistsRetry: '立即重试',
     pendingPersistsDiscard: '丢弃',
@@ -506,6 +517,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Detectado: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Búsqueda fallida: ${v.msg}`,
+    aiErrorBilling:
+      'El servicio de traducción con IA se ha quedado sin crédito, así que por ahora no se pueden buscar palabras nuevas (las que ya buscaste siguen funcionando). Contacta con el administrador del sitio.',
+    aiErrorAuth:
+      'El servicio de traducción con IA está mal configurado (clave de API no válida o caducada). Contacta con el administrador del sitio.',
+    aiErrorBusy: 'El servicio de traducción con IA está ocupado en este momento. Inténtalo de nuevo en unos instantes.',
+    aiErrorFailed: 'La traducción con IA ha fallado. Inténtalo de nuevo o reformula la entrada.',
     pendingPersistsCount: (v: Vars) =>
       Number(v.n) === 1
         ? '1 consulta pendiente de sincronización'
@@ -726,6 +743,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Erkannt: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Suche fehlgeschlagen: ${v.msg}`,
+    aiErrorBilling:
+      'Das Guthaben des KI-Übersetzungsdienstes ist aufgebraucht, daher sind neue Suchen vorerst nicht möglich (bereits gesuchte Wörter funktionieren weiterhin). Bitte wenden Sie sich an den Website-Administrator.',
+    aiErrorAuth:
+      'Der KI-Übersetzungsdienst ist falsch konfiguriert (API-Schlüssel ungültig oder abgelaufen). Bitte wenden Sie sich an den Website-Administrator.',
+    aiErrorBusy: 'Der KI-Übersetzungsdienst ist gerade ausgelastet. Bitte versuchen Sie es gleich noch einmal.',
+    aiErrorFailed: 'Die KI-Übersetzung ist fehlgeschlagen. Bitte versuchen Sie es erneut oder formulieren Sie die Eingabe um.',
     pendingPersistsCount: (v: Vars) =>
       Number(v.n) === 1
         ? '1 Abfrage wartet auf Synchronisierung'
@@ -946,6 +969,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Détecté : ${v.lang}`,
 
     queryFailed: (v: Vars) => `Échec de la recherche : ${v.msg}`,
+    aiErrorBilling:
+      "Le service de traduction IA n'a plus de crédit : les nouvelles recherches sont indisponibles pour le moment (les mots déjà recherchés restent accessibles). Veuillez contacter l'administrateur du site.",
+    aiErrorAuth:
+      "Le service de traduction IA est mal configuré (clé API invalide ou expirée). Veuillez contacter l'administrateur du site.",
+    aiErrorBusy: 'Le service de traduction IA est momentanément surchargé. Veuillez réessayer dans un instant.',
+    aiErrorFailed: 'La traduction IA a échoué. Veuillez réessayer ou reformuler votre saisie.',
     pendingPersistsCount: (v: Vars) =>
       Number(v.n) === 1
         ? '1 requête en attente de synchronisation'
@@ -1166,6 +1195,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `検出：${v.lang}`,
 
     queryFailed: (v: Vars) => `検索失敗：${v.msg}`,
+    aiErrorBilling:
+      'AI翻訳サービスのクレジットが不足しているため、現在は新しい単語を検索できません（検索済みの単語は引き続き利用できます）。サイト管理者にお問い合わせください。',
+    aiErrorAuth:
+      'AI翻訳サービスの設定に問題があります（APIキーが無効または期限切れです）。サイト管理者にお問い合わせください。',
+    aiErrorBusy: 'AI翻訳サービスが混み合っています。しばらくしてから再度お試しください。',
+    aiErrorFailed: 'AI翻訳に失敗しました。もう一度試すか、別の言い方で入力してください。',
     pendingPersistsCount: (v: Vars) => `${v.n} 件のクエリが同期待ち`,
     pendingPersistsRetry: '今すぐ再試行',
     pendingPersistsDiscard: '破棄',
@@ -1379,6 +1414,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `감지됨: ${v.lang}`,
 
     queryFailed: (v: Vars) => `검색 실패: ${v.msg}`,
+    aiErrorBilling:
+      'AI 번역 서비스의 크레딧이 소진되어 지금은 새 단어를 검색할 수 없습니다(이미 검색한 단어는 계속 사용할 수 있습니다). 사이트 관리자에게 문의하세요.',
+    aiErrorAuth:
+      'AI 번역 서비스 설정에 문제가 있습니다(API 키가 유효하지 않거나 만료됨). 사이트 관리자에게 문의하세요.',
+    aiErrorBusy: 'AI 번역 서비스가 일시적으로 혼잡합니다. 잠시 후 다시 시도하세요.',
+    aiErrorFailed: 'AI 번역에 실패했습니다. 다시 시도하거나 다른 표현으로 입력해 보세요.',
     pendingPersistsCount: (v: Vars) => `동기화 대기 중인 검색 ${v.n}건`,
     pendingPersistsRetry: '지금 다시 시도',
     pendingPersistsDiscard: '버리기',
@@ -1592,6 +1633,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Определён: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Ошибка поиска: ${v.msg}`,
+    aiErrorBilling:
+      'У сервиса ИИ-перевода закончились кредиты, поэтому поиск новых слов сейчас недоступен (ранее найденные слова по-прежнему работают). Обратитесь к администратору сайта.',
+    aiErrorAuth:
+      'Сервис ИИ-перевода настроен неправильно (недействительный или просроченный API-ключ). Обратитесь к администратору сайта.',
+    aiErrorBusy: 'Сервис ИИ-перевода временно перегружен. Попробуйте ещё раз чуть позже.',
+    aiErrorFailed: 'Не удалось выполнить ИИ-перевод. Попробуйте ещё раз или перефразируйте запрос.',
     pendingPersistsCount: (v: Vars) =>
       `Запросов в очереди на синхронизацию: ${v.n}`,
     pendingPersistsRetry: 'Повторить сейчас',
@@ -1806,6 +1853,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `تم اكتشاف: ${v.lang}`,
 
     queryFailed: (v: Vars) => `فشل البحث: ${v.msg}`,
+    aiErrorBilling:
+      'نفد رصيد خدمة الترجمة بالذكاء الاصطناعي، لذا يتعذر البحث عن كلمات جديدة حاليًا (الكلمات التي بحثت عنها سابقًا لا تزال متاحة). يرجى التواصل مع مسؤول الموقع.',
+    aiErrorAuth:
+      'خدمة الترجمة بالذكاء الاصطناعي غير مهيأة بشكل صحيح (مفتاح API غير صالح أو منتهي الصلاحية). يرجى التواصل مع مسؤول الموقع.',
+    aiErrorBusy: 'خدمة الترجمة بالذكاء الاصطناعي مشغولة مؤقتًا. يرجى المحاولة مرة أخرى بعد قليل.',
+    aiErrorFailed: 'فشلت الترجمة بالذكاء الاصطناعي. يرجى المحاولة مرة أخرى أو إعادة صياغة المدخل.',
     pendingPersistsCount: (v: Vars) => `${v.n} استعلامات في انتظار المزامنة`,
     pendingPersistsRetry: 'إعادة المحاولة الآن',
     pendingPersistsDiscard: 'تجاهل',
@@ -2020,6 +2073,12 @@ const DICT = {
     detectedLanguage: (v: Vars) => `Registreret: ${v.lang}`,
 
     queryFailed: (v: Vars) => `Opslag mislykkedes: ${v.msg}`,
+    aiErrorBilling:
+      'AI-oversættelsestjenesten er løbet tør for kredit, så nye opslag er ikke mulige lige nu (ord, du har slået op før, virker stadig). Kontakt sidens administrator.',
+    aiErrorAuth:
+      'AI-oversættelsestjenesten er forkert konfigureret (ugyldig eller udløbet API-nøgle). Kontakt sidens administrator.',
+    aiErrorBusy: 'AI-oversættelsestjenesten er midlertidigt optaget. Prøv igen om lidt.',
+    aiErrorFailed: 'AI-oversættelsen mislykkedes. Prøv igen, eller omformulér dit input.',
     pendingPersistsCount: (v: Vars) =>
       Number(v.n) === 1
         ? '1 opslag venter på synkronisering'

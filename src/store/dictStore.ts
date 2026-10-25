@@ -29,7 +29,8 @@ import type {
   Syllable,
   TranslationDirection,
 } from '../types/dictionary';
-import { translateWord } from '../api/translateClient';
+import { TranslateError, translateWord } from '../api/translateClient';
+import { localizeAiError } from '../api/aiErrorMessage';
 import type { UILang } from '../i18n';
 import { supabase, withTimeout } from '../auth/supabaseClient';
 import type { ManagedStudent } from '../auth/types';
@@ -1617,10 +1618,15 @@ export const useDictStore = create<DictState>()(
           // The AI result is already in the global cache from our
           // /api/translate request, so a refresh + re-query hits
           // cache and is instant.
+          const aiMsg =
+            err instanceof TranslateError
+              ? localizeAiError(get().prefs.uiLanguage, err.code, err.detail)
+              : null;
           const isAbort = /aborted?|abort/i.test(msg) || (err instanceof DOMException && err.name === 'AbortError');
-          const friendly = isAbort
-            ? '云端保存超时（页面闲置过久后偶发）。请刷新页面后再查一次——结果已缓存，重试会立刻返回。'
-            : msg;
+          const friendly = aiMsg
+            ?? (isAbort
+              ? '云端保存超时（页面闲置过久后偶发）。请刷新页面后再查一次——结果已缓存，重试会立刻返回。'
+              : msg);
           set({ loading: false, error: friendly });
         }
       },
